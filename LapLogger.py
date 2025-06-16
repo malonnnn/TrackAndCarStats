@@ -174,89 +174,83 @@ def acUpdate(deltaT):
         focused_car = ac.getFocusedCar()
         focused_pos = ac.getCarRealTimeLeaderboardPosition(focused_car)
         
+        def calculate_gap(car_id, my_pos, my_speed):
+            """Calculate gap to another car"""
+            if car_id < 0:
+                return None, None
+            
+            car_pos = ac.getCarState(car_id, acsys.CS.NormalizedSplinePosition)
+            car_speed = ac.getCarState(car_id, acsys.CS.SpeedMS)
+            name = ac.getCarName(car_id)  # Using car name instead of driver name
+            name = name.split('_')[-1][:8]  # Take last part of car name, limit to 8 chars
+            
+            # Calculate the gap
+            track_length = ac.getTrackLength(0)
+            pos_diff = car_pos - my_pos
+            if pos_diff < -0.5:
+                pos_diff += 1.0
+            elif pos_diff > 0.5:
+                pos_diff -= 1.0
+            pos_diff *= track_length
+            
+            # Calculate time gap
+            if my_speed > 0 and car_speed > 0:
+                avg_speed = (car_speed + my_speed) / 2
+                gap = pos_diff / avg_speed * 1000  # Convert to milliseconds
+                if abs(gap) < 30000:  # Only return reasonable gaps (under 30 seconds)
+                    return name, gap
+            return None, None
+        
         # Clear the label if we're not in a valid state
         if focused_car < 0 or focused_pos < 0:
             ac.setText(l_relative, "")
+            return
+            
+        # Get my current state
+        my_pos = ac.getCarState(focused_car, acsys.CS.NormalizedSplinePosition)
+        my_speed = ac.getCarState(focused_car, acsys.CS.SpeedMS)
+        
+        # Find cars ahead and behind
+        car_ahead = -1
+        car_behind = -1
+        
+        for car_id in range(car_count):
+            pos = ac.getCarRealTimeLeaderboardPosition(car_id)
+            if pos == focused_pos - 1:
+                car_ahead = car_id
+            elif pos == focused_pos + 1:
+                car_behind = car_id
+        
+        # Calculate gaps
+        ahead_name, ahead_gap = calculate_gap(car_ahead, my_pos, my_speed)
+        behind_name, behind_gap = calculate_gap(car_behind, my_pos, my_speed)
+        
+        # Format display - make it more compact by using a single line
+        relative_text = ""
+        if ahead_name and behind_name:
+            # Show both gaps in format: "↑Car1 +1.234 ↓Car2 -0.567"
+            relative_text = "↑ {} +{} ↓ {} -{}".format(
+                ahead_name,
+                format_time(abs(ahead_gap)),
+                behind_name,
+                format_time(abs(behind_gap))
+            )
+        elif ahead_name:
+            # Only show car ahead: "↑Car1 -1.234"
+            relative_text = "↑ {} -{}".format(
+                ahead_name,
+                format_time(abs(ahead_gap))
+            )
+        elif behind_name:
+            # Only show car behind: "Lead ↓Car2 +0.567"
+            relative_text = "Lead ↓ {} +{}".format(
+                behind_name,
+                format_time(abs(behind_gap))
+            )
         else:
-            found_car_ahead = False
-            
-            # Look for the car immediately ahead
-            for car_id in range(car_count):
-                pos = ac.getCarRealTimeLeaderboardPosition(car_id)
-                if pos == focused_pos - 1:  # Car ahead
-                    found_car_ahead = True
-                    name = ac.getDriverName(car_id)[:12]
-                    
-                    # Get track positions (0.0 to 1.0)
-                    car_pos = ac.getCarState(car_id, acsys.CS.NormalizedSplinePosition)
-                    my_pos = ac.getCarState(focused_car, acsys.CS.NormalizedSplinePosition)
-                    
-                    # Get their speeds in m/s
-                    car_speed = ac.getCarState(car_id, acsys.CS.SpeedMS)
-                    my_speed = ac.getCarState(focused_car, acsys.CS.SpeedMS)
-                    
-                    # Calculate the gap
-                    track_length = ac.getTrackLength(0)
-                    # Handle track position wrapping around from 1.0 to 0.0
-                    pos_diff = car_pos - my_pos
-                    if pos_diff < -0.5:
-                        pos_diff += 1.0
-                    elif pos_diff > 0.5:
-                        pos_diff -= 1.0
-                    pos_diff *= track_length  # convert to meters
-                    
-                    # Estimate time gap based on average speed
-                    if my_speed > 0:  # avoid division by zero
-                        avg_speed = (car_speed + my_speed) / 2
-                        if avg_speed > 0:  # extra safety check
-                            gap = pos_diff / avg_speed * 1000  # convert to milliseconds
-                            # Only show gap if it's reasonable (less than 30 seconds)
-                            if abs(gap) < 30000:
-                                if gap > 0:
-                                    ac.setText(l_relative, "{} +{}".format(name, format_time(abs(gap))))
-                                else:
-                                    ac.setText(l_relative, "{} -{}".format(name, format_time(abs(gap))))
-                    break
-            
-            if not found_car_ahead:
-                # We're leading, let's find the gap to the car behind
-                found_car_behind = False
-                for car_id in range(car_count):
-                    pos = ac.getCarRealTimeLeaderboardPosition(car_id)
-                    if pos == focused_pos + 1:  # Car behind
-                        found_car_behind = True
-                        name = ac.getDriverName(car_id)[:12]
-                        
-                        # Get track positions (0.0 to 1.0)
-                        car_pos = ac.getCarState(car_id, acsys.CS.NormalizedSplinePosition)
-                        my_pos = ac.getCarState(focused_car, acsys.CS.NormalizedSplinePosition)
-                        
-                        # Get their speeds in m/s
-                        car_speed = ac.getCarState(car_id, acsys.CS.SpeedMS)
-                        my_speed = ac.getCarState(focused_car, acsys.CS.SpeedMS)
-                        
-                        # Calculate the gap
-                        track_length = ac.getTrackLength(0)
-                        # Handle track position wrapping around from 1.0 to 0.0
-                        pos_diff = my_pos - car_pos  # Note: reversed to show positive gap to car behind
-                        if pos_diff < -0.5:
-                            pos_diff += 1.0
-                        elif pos_diff > 0.5:
-                            pos_diff -= 1.0
-                        pos_diff *= track_length  # convert to meters
-                        
-                        # Estimate time gap based on average speed
-                        if my_speed > 0:  # avoid division by zero
-                            avg_speed = (car_speed + my_speed) / 2
-                            if avg_speed > 0:  # extra safety check
-                                gap = pos_diff / avg_speed * 1000  # convert to milliseconds
-                                # Only show gap if it's reasonable (less than 30 seconds)
-                                if abs(gap) < 30000:
-                                    ac.setText(l_relative, "{} +{}".format(name, format_time(abs(gap))))
-                                    break
-                
-                if not found_car_behind:
-                    ac.setText(l_relative, "In Lead")
+            relative_text = "In Lead"
+        
+        ac.setText(l_relative, relative_text)
         
         # Update current lap time
         current_time = ac.getCarState(0, acsys.CS.LapTime)
@@ -286,7 +280,6 @@ def acUpdate(deltaT):
             best_sector3 = float('inf')
         
         # Check all cars for finishes
-        car_count = ac.getCarsCount()
         for car_id in range(car_count):
             if car_id in finished_cars:
                 continue
@@ -318,7 +311,7 @@ def acUpdate(deltaT):
                     # Check if this is a new record
                     if check_record(track, car, driver, time_ms):
                         # Update the display with the new record
-                        ac.setText(l_record_holder, "Track Record: {} ({})".format(format_time(time_ms), driver))
+                        ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), car))
                     
                     finished_cars.add(car_id)
     
