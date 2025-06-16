@@ -84,29 +84,40 @@ class LapLoggerViewer:
         return f"{minutes:d}:{seconds:06.3f}"
 
     def load_records(self):
-        """Load records from CSV file"""
-        records_file = os.path.join(os.path.dirname(__file__), "track_records.csv")
+        """Load records from all track CSV files"""
+        records_dir = os.path.join(os.path.dirname(__file__), "records")
+        self.records = []
+        
+        if not os.path.exists(records_dir):
+            messagebox.showwarning("No Records", "No lap records found.")
+            return
+            
         try:
-            if os.path.exists(records_file):
-                with open(records_file, 'r') as f:
-                    reader = csv.reader(f)
-                    next(reader)  # Skip header
-                    self.records = []
-                    for row in reader:
-                        track, car, time_ms = row
-                        self.records.append({
-                            'track': track,
-                            'car': car,
-                            'time_ms': int(time_ms)
-                        })
+            # Load records from each track file
+            for file in os.listdir(records_dir):
+                if file.endswith(".csv"):
+                    track_name = file[:-4]  # Remove .csv extension
+                    track_file = os.path.join(records_dir, file)
                     
-                    # Update track dropdown
-                    tracks = sorted(set(record['track'] for record in self.records))
-                    self.track_combo['values'] = ["All Tracks"] + tracks
-                    self.track_combo.set("All Tracks")
-                    
-                    # Display records
-                    self.display_records()
+                    with open(track_file, 'r') as f:
+                        reader = csv.reader(f)
+                        next(reader)  # Skip header (Car, Time_ms)
+                        for row in reader:
+                            car, time_ms = row
+                            self.records.append({
+                                'track': track_name,
+                                'car': car,
+                                'time_ms': int(time_ms)
+                            })
+            
+            # Update track list in combobox
+            tracks = sorted(list(set(r['track'] for r in self.records)))
+            tracks.insert(0, "All Tracks")
+            self.track_combo['values'] = tracks
+            
+            # Display records
+            self.filter_records()
+            
         except Exception as e:
             messagebox.showerror("Error", f"Error loading records: {str(e)}")
 

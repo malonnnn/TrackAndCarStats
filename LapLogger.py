@@ -3,6 +3,7 @@ import ac
 import acsys
 import os
 import csv
+import time
 from datetime import datetime
 
 l_lapcount = 0
@@ -13,8 +14,21 @@ l_last_lap = 0
 l_relative = 0
 lapcount = 0
 finished_cars = set()  # Track which cars we've logged finishes for
-records_file = "apps/python/LapLogger/track_records.csv"
+records_dir = "apps/python/LapLogger/records"  # Directory for track record files
 last_lap_times = {}  # Format: {car_id: last_lap_time}
+records_cache = {}  # Format: {track: {car: time_ms}}
+last_load_time = {}  # Format: {track: timestamp}
+
+def get_track_records_file(track_name):
+    """Get the records file path for a specific track"""
+    # Ensure records directory exists
+    if not os.path.exists(records_dir):
+        os.makedirs(records_dir)
+        ac.log("LapLogger: Created records directory at {}".format(records_dir))
+    
+    records_file = os.path.join(records_dir, "{}.csv".format(track_name))
+    ac.log("LapLogger: Track records file path: {}".format(records_file))
+    return records_file
 
 def format_time(ms):
     """Convert milliseconds to formatted time string"""
@@ -28,31 +42,73 @@ def format_time(ms):
     # For lap times, we typically don't need hours, just MM:SS.mmm
     return "{:d}:{:06.3f}".format(minutes, seconds)
 
-def load_records():
-    """Load existing track records"""
-    records = {}  # Format: {(track, car): time_ms}
+def load_track_records(track):
+    """Load records for a specific track, using cache if available"""
+    global records_cache, last_load_time
+    current_time = time.time()
+    
+    # Use cache if available and less than 5 seconds old
+    if track in records_cache and track in last_load_time:
+        if current_time - last_load_time[track] < 5:  # Cache for 5 seconds
+            return records_cache[track].copy()  # Return a copy to prevent cache modification
+    
+    records = {}  # Format: {car: time_ms}
     try:
+        ac.log("LapLogger: Loading records for track: {}".format(track))
+        records_file = get_track_records_file(track)
+        
         if os.path.exists(records_file):
-            with open(records_file, 'r') as f:
+            with open(records_file, 'r', newline='') as f:
                 reader = csv.reader(f)
-                next(reader)  # Skip header
+                next(reader)  # Skip header row (Car,Time_ms)
+                
                 for row in reader:
-                    track, car, time_ms = row
-                    records[(track, car)] = int(time_ms)
+                    try:
+                        if len(row) >= 2:  # Make sure we have both car and time
+                            car, time_ms = row[0], row[1]  # Use indexing to be safer
+                            records[car] = int(time_ms)  # Convert time to integer
+                    except (ValueError, IndexError) as e:
+                        ac.log("LapLogger Warning: Skipping invalid row in {}: {}".format(track, str(e)))
+            
+            ac.log("LapLogger: Loaded {} records for track {}".format(len(records), track))
+        else:
+            ac.log("LapLogger: No existing records file, creating new one")
+            # Create directory if it doesn't exist
+            records_dir = os.path.dirname(records_file)
+            if not os.path.exists(records_dir):
+                os.makedirs(records_dir)
+                
+            with open(records_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Car', 'Time_ms'])  # Write header
+            
     except Exception as e:
-        ac.log("LapLogger Error loading records: {}".format(str(e)))
+        ac.log("LapLogger Error loading records for {}: {}".format(track, str(e)))
+    
+    # Update cache
+    records_cache[track] = records.copy()
+    last_load_time[track] = current_time
+    
     return records
 
-def save_records(records):
-    """Save track records to file"""
+def save_track_records(track, records):
+    """Save records for a specific track"""
+    global records_cache, last_load_time
     try:
+        records_file = get_track_records_file(track)
         with open(records_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['Track', 'Car', 'Time_ms'])
-            for (track, car), time_ms in records.items():
-                writer.writerow([track, car, time_ms])
+            writer.writerow(['Car', 'Time_ms'])  # Write header
+            for car, time_ms in records.items():
+                writer.writerow([car, time_ms])
+        
+        # Update cache with the new records
+        records_cache[track] = records.copy()
+        last_load_time[track] = time.time()
+        
+        ac.log("LapLogger: Saved {} records for track {}".format(len(records), track))
     except Exception as e:
-        ac.log("LapLogger Error saving records: {}".format(str(e)))
+        ac.log("LapLogger Error saving records for {}: {}".format(track, str(e)))
 
 def check_record(track, car, driver, time_ms):
     """Check if this is a new record and update if so"""
@@ -60,16 +116,15 @@ def check_record(track, car, driver, time_ms):
         ac.log("LapLogger Debug: Checking record - Track: {}, Car: {}, Time: {}".format(
             track, car, format_time(time_ms)))
         
-        records = load_records()
-        current_key = (track, car)
+        records = load_track_records(track)
         
         # First check if this is a track record (best time for this track across all cars)
         track_best_time = float('inf')
         track_best_car = None
-        for (rec_track, rec_car), rec_time in records.items():
-            if rec_track == track and rec_time < track_best_time:
+        for record_car, rec_time in records.items():
+            if rec_time < track_best_time:
                 track_best_time = rec_time
-                track_best_car = rec_car
+                track_best_car = record_car
         
         ac.log("LapLogger Debug: Current track best - Time: {}, Car: {}".format(
             format_time(track_best_time) if track_best_time != float('inf') else "none",
@@ -79,10 +134,10 @@ def check_record(track, car, driver, time_ms):
         is_track_record = track_best_time == float('inf') or time_ms < track_best_time
         
         # Update the car-specific record
-        if current_key not in records or time_ms < records[current_key]:
-            old_time = format_time(records[current_key]) if current_key in records else "none"
-            records[current_key] = time_ms
-            save_records(records)
+        if car not in records or time_ms < records[car]:
+            old_time = format_time(records[car]) if car in records else "none"
+            records[car] = time_ms
+            save_track_records(track, records)
             
             # Only announce if it's a track record
             if is_track_record:
@@ -105,15 +160,15 @@ def get_current_record():
     """Get the current record for the active track"""
     try:
         track = ac.getTrackName(0)
-        records = load_records()
+        records = load_track_records(track)
         best_time = float('inf')
         best_car = None
         
-        # Find the best time for this track across all cars
-        for (rec_track, rec_car), time_ms in records.items():
-            if rec_track == track and time_ms < best_time:
+        # Find the best time for this track
+        for car, time_ms in records.items():
+            if time_ms < best_time:
                 best_time = time_ms
-                best_car = rec_car
+                best_car = car
         
         if best_time != float('inf'):
             return best_time, best_car
@@ -126,10 +181,9 @@ def get_car_best_time(car_id):
     try:
         track = ac.getTrackName(0)
         car = ac.getCarName(car_id)
-        records = load_records()
-        key = (track, car)
-        if key in records:
-            return records[key]
+        records = load_track_records(track)
+        if car in records:
+            return records[car]
     except Exception as e:
         ac.log("LapLogger Error getting car best time: {}".format(str(e)))
     return None
@@ -137,6 +191,8 @@ def get_car_best_time(car_id):
 def acMain(ac_version):
     try:
         global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, l_record_holder, l_relative
+
+        
         appWindow = ac.newApp("LapLogger")
         ac.setSize(appWindow, 300, 280)  # Increased width to 300
         ac.setTitle(appWindow, "")  # Remove title bar text to save space
@@ -170,14 +226,16 @@ def acMain(ac_version):
         l_relative = ac.addLabel(appWindow, "")
         ac.setPosition(l_relative, 3, 160)
         ac.setFontSize(l_relative, 13)
-        ac.setSize(l_relative, 290, 20)  # Make label use full width
-          # Create records file if it doesn't exist
-        if not os.path.exists(records_file):
-            save_records({})
-              # Display current record if it exists
+        ac.setSize(l_relative, 290, 20)  # Make label use full width        # Create records directory if it doesn't exist
+        if not os.path.exists(records_dir):
+            os.makedirs(records_dir)
+            ac.log("LapLogger: Created records directory")
+        
+        # Display current record if it exists
         time_ms, driver = get_current_record()
         if time_ms:
             ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), driver))
+  
         
         ac.log("LapLogger: Window created successfully")
         return "LapLogger"
