@@ -7,6 +7,10 @@ from tkinter import ttk, messagebox
 from operator import itemgetter
 from collections import defaultdict
 
+def normalize_path(path):
+    """Normalize a path to use forward slashes"""
+    return path.replace('\\', '/')
+
 class TrackAndCarStatsViewer:
     def __init__(self, root):
         self.root = root
@@ -84,8 +88,7 @@ class TrackAndCarStatsViewer:
         return f"{minutes:d}:{seconds:06.3f}"
 
     def load_records(self):
-        """Load records from all track CSV files"""
-        records_dir = os.path.join(os.path.dirname(__file__), "records")
+        """Load records from all track CSV files"""        records_dir = os.path.join(os.path.dirname(__file__), "records").replace('\\', '/')
         self.records = []
         
         if not os.path.exists(records_dir):
@@ -97,7 +100,7 @@ class TrackAndCarStatsViewer:
             for file in os.listdir(records_dir):
                 if file.endswith(".csv"):
                     track_name = file[:-4]  # Remove .csv extension
-                    track_file = os.path.join(records_dir, file)
+                    track_file = os.path.join(records_dir, file).replace('\\', '/')
                     
                     with open(track_file, 'r') as f:
                         reader = csv.reader(f)

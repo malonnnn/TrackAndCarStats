@@ -14,7 +14,7 @@ l_last_lap = 0
 l_relative = 0
 lapcount = 0
 finished_cars = set()  # Track which cars we've logged finishes for
-records_dir = "apps/python/TrackAndCarStats/records"  # Directory for track record files
+records_dir = "apps/python/TrackAndCarStats/records"  # Directory for track record files, using forward slashes for consistency
 last_lap_times = {}  # Format: {car_id: last_lap_time}
 records_cache = {}  # Format: {track: {car: time_ms}}
 last_load_time = {}  # Format: {track: timestamp}
@@ -35,19 +35,24 @@ def get_track_layout():
     except:
         return "default"
 
+def get_full_track_name():
+    """Get the track name including its configuration"""
+    track_name = ac.getTrackName(0)
+    layout = get_track_layout()
+    return "{}_{}".format(track_name, layout)
+
+def normalize_path(path):
+    """Normalize a path to use forward slashes"""
+    return path.replace('\\', '/')
+
 def get_track_records_file(track_name):
     """Get the records file path for a specific track"""
     # Ensure records directory exists
     if not os.path.exists(records_dir):
         os.makedirs(records_dir)
-        ac.log("TACS: Created records directory at {}".format(records_dir))
+        ac.log("TACS: Created records directory at {}".format(normalize_path(records_dir)))
     
-    # Get track layout
-    layout = get_track_layout()
-    
-    # Create filename with the new naming convention
-    filename = "{}_{}.csv".format(track_name, layout)
-    records_file = os.path.join(records_dir, filename)
+    records_file = normalize_path(os.path.join(records_dir, "{}.csv".format(track_name)))
     ac.log("TACS: Track records file path: {}".format(records_file))
     return records_file
 
@@ -67,7 +72,7 @@ def load_track_records(track):
     """Load records for a specific track, using cache if available"""
     global records_cache, last_load_time
     current_time = time.time()
-      # Use cache if available and less than 60 seconds old
+    # Use cache if available and less than 60 seconds old
     if track in records_cache and track in last_load_time:
         if current_time - last_load_time[track] < 60:  # Cache for 60 seconds
             return records_cache[track].copy()  # Return a copy to prevent cache modification
@@ -96,10 +101,9 @@ def load_track_records(track):
             ac.log("TACS: Loaded {} records for track {}".format(len(records), track))
         else:
             ac.log("TACS: No existing records file, creating new one")
-            # Create directory if it doesn't exist
-            records_dir = os.path.dirname(records_file)
-            if not os.path.exists(records_dir):
-                os.makedirs(records_dir)
+            # Create directory if it doesn't exist            records_path = os.path.dirname(records_file)
+            if not os.path.exists(records_path):
+                os.makedirs(records_path)
                 
             with open(records_file, 'w', newline='') as f:
                 writer = csv.writer(f)
@@ -187,9 +191,8 @@ def get_current_record():
     # Return cached values if they exist and are fresh
     if cached_record_time is not None and current_time - last_ui_update < UI_UPDATE_INTERVAL:
         return cached_record_time, cached_record_car
-    
     try:
-        track = ac.getTrackName(0)
+        track = get_full_track_name()
         records = load_track_records(track)
         best_time = float('inf')
         best_car = None
@@ -220,7 +223,7 @@ def get_car_best_time(car_id):
         return None
         
     try:
-        track = ac.getTrackName(0)
+        track = get_full_track_name()
         car = ac.getCarName(car_id)
         records = load_track_records(track)
         if car in records:
@@ -229,16 +232,11 @@ def get_car_best_time(car_id):
         ac.log("TACS Error getting car best time: {}".format(str(e)))
     return None
 
-def get_track_layout():
-    """Get the current track layout configuration"""
-    try:
-        # Get the track configuration from AC's API
-        track_config = ac.getTrackConfiguration(0)
-        if track_config and track_config.strip():
-            return track_config.lower()
-        return "default"  # Default layout if none specified
-    except:
-        return "default"
+def get_full_track_name():
+    """Get the track name including its configuration"""
+    track_name = ac.getTrackName(0)
+    layout = get_track_layout()
+    return "{}_{}".format(track_name, layout)
 
 def acMain(ac_version):
     try:
@@ -426,7 +424,7 @@ def acUpdate(deltaT):
             # Check for new completed laps
             if last_time > 0 and (focused_car not in last_lap_times or last_time != last_lap_times[focused_car]):
                 last_lap_times[focused_car] = last_time
-                track = ac.getTrackName(0)
+                track = get_full_track_name()
                 car = ac.getCarName(focused_car)
                 driver = ac.getDriverName(focused_car)
                 check_record(track, car, driver, last_time)  # Display is updated in check_record if it's a record
@@ -468,7 +466,7 @@ def acUpdate(deltaT):
             if is_finished:
                 driver = ac.getDriverName(car_id)
                 car = ac.getCarName(car_id)
-                track = ac.getTrackName(0)
+                track = get_full_track_name()
                 time_ms = ac.getCarState(car_id, acsys.CS.LastLap)
                 
                 # Only process valid times
