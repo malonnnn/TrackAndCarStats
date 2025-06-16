@@ -18,6 +18,11 @@ records_dir = "apps/python/TrackAndCarStats/records"  # Directory for track reco
 last_lap_times = {}  # Format: {car_id: last_lap_time}
 records_cache = {}  # Format: {track: {car: time_ms}}
 last_load_time = {}  # Format: {track: timestamp}
+last_ui_update = 0  # Track when we last updated the UI with record information
+UI_UPDATE_INTERVAL = 2.0  # Update UI with record information every 2 seconds
+last_displayed_text = {}  # Store last displayed text for each label
+cached_record_time = None
+cached_record_car = None
 
 def get_track_records_file(track_name):
     """Get the records file path for a specific track"""
@@ -46,11 +51,13 @@ def load_track_records(track):
     """Load records for a specific track, using cache if available"""
     global records_cache, last_load_time
     current_time = time.time()
-    
-    # Use cache if available and less than 5 seconds old
+      # Use cache if available and less than 60 seconds old
     if track in records_cache and track in last_load_time:
-        if current_time - last_load_time[track] < 5:  # Cache for 5 seconds
+        if current_time - last_load_time[track] < 60:  # Cache for 60 seconds
             return records_cache[track].copy()  # Return a copy to prevent cache modification
+        else:
+            ac.log("TACS Debug: Cache expired for track {} (age: {:.1f}s)".format(
+                track, current_time - last_load_time[track]))
     
     records = {}  # Format: {car: time_ms}
     try:
@@ -158,6 +165,13 @@ def check_record(track, car, driver, time_ms):
 
 def get_current_record():
     """Get the current record for the active track"""
+    global cached_record_time, cached_record_car, last_ui_update
+    current_time = time.time()
+    
+    # Return cached values if they exist and are fresh
+    if cached_record_time is not None and current_time - last_ui_update < UI_UPDATE_INTERVAL:
+        return cached_record_time, cached_record_car
+    
     try:
         track = ac.getTrackName(0)
         records = load_track_records(track)
@@ -171,6 +185,10 @@ def get_current_record():
                 best_car = car
         
         if best_time != float('inf'):
+            # Update cache
+            cached_record_time = best_time
+            cached_record_car = best_car
+            last_ui_update = current_time
             return best_time, best_car
     except Exception as e:
         ac.log("TACS Error getting current record: {}".format(str(e)))
@@ -178,6 +196,13 @@ def get_current_record():
 
 def get_car_best_time(car_id):
     """Get the best time for a specific car on the current track from records"""
+    global last_ui_update
+    current_time = time.time()
+    
+    # Only check records periodically
+    if current_time - last_ui_update < UI_UPDATE_INTERVAL:
+        return None
+        
     try:
         track = ac.getTrackName(0)
         car = ac.getCarName(car_id)
@@ -245,7 +270,12 @@ def acMain(ac_version):
 
 def acUpdate(deltaT):
     try:
-        global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, lapcount, best_sector1, best_sector2, best_sector3, finished_cars, l_relative
+        global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, lapcount
+        global best_sector1, best_sector2, best_sector3, finished_cars, l_relative, l_last_lap, last_ui_update
+        global last_displayed_text
+        
+        current_time = time.time()
+        should_update_ui = current_time - last_ui_update >= UI_UPDATE_INTERVAL
         
         # Get car count first
         car_count = ac.getCarsCount()
@@ -336,9 +366,11 @@ def acUpdate(deltaT):
         if current_time > 0:
             ac.setText(l_current_time, "Current: {}".format(format_time(current_time)))
         else:
-            ac.setText(l_current_time, "Current: --:--.---")        # Update best lap time - consider all sources
+            ac.setText(l_current_time, "Current: --:--.---")        # Update best lap time - only check records periodically
         session_best = ac.getCarState(focused_car, acsys.CS.BestLap)
-        car_best = get_car_best_time(focused_car)
+        car_best = None
+        if should_update_ui:
+            car_best = get_car_best_time(focused_car)
         last_time = ac.getCarState(focused_car, acsys.CS.LastLap)
         
         # Initialize best time to infinity
@@ -356,8 +388,8 @@ def acUpdate(deltaT):
         # Update display with the best time we found
         if best_time != float('inf'):
             ac.setText(l_best_time, "Best: {}".format(format_time(best_time)))
-        else:
-            ac.setText(l_best_time, "Best: --:--.---")        # Track lap completions and update last lap time
+        
+        # Track lap completions and update last lap time
         global l_last_lap, l_record_holder  # Ensure we have access to the labels
         current_laps = ac.getCarState(focused_car, acsys.CS.LapCount)
         last_time = ac.getCarState(focused_car, acsys.CS.LastLap)
@@ -366,24 +398,20 @@ def acUpdate(deltaT):
         try:
             # Check for new completed laps
             if last_time > 0 and (focused_car not in last_lap_times or last_time != last_lap_times[focused_car]):
-                ac.log("TACS Debug: Car {} completed lap with time {}".format(focused_car, format_time(last_time)))
                 last_lap_times[focused_car] = last_time
-                
-                # Check if this is a new record
                 track = ac.getTrackName(0)
                 car = ac.getCarName(focused_car)
                 driver = ac.getDriverName(focused_car)
-                if check_record(track, car, driver, last_time):
-                    # The display is already updated in check_record if it's a track record
-                    ac.log("TACS Debug: New track record set!")
-                
-            # Always update the display with the best information we have
-            if focused_car in last_lap_times and last_lap_times[focused_car] > 0:
-                lap_text = "Last Lap: {}".format(format_time(last_lap_times[focused_car]))
-                ac.log("TACS Debug: Setting last lap text to: {}".format(lap_text))
-                ac.setText(l_last_lap, lap_text)
-            else:
-                ac.setText(l_last_lap, "Last Lap: --:--.---")
+                check_record(track, car, driver, last_time)  # Display is updated in check_record if it's a record
+            
+            # Update last lap display only if needed
+            new_lap_text = "Last Lap: {}".format(
+                format_time(last_lap_times[focused_car]) if focused_car in last_lap_times and last_lap_times[focused_car] > 0
+                else "--:--.---"
+            )
+            if new_lap_text != last_displayed_text.get('last_lap'):
+                last_displayed_text['last_lap'] = new_lap_text
+                ac.setText(l_last_lap, new_lap_text)
         except Exception as e:
             ac.log("TACS Error updating last lap: {}".format(str(e)))
         
