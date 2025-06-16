@@ -57,7 +57,7 @@ def check_record(track, car, driver, time_ms):
     """Check if this is a new record and update if so"""
     try:
         records = load_records()
-        key = (track, car)
+        key = (track, driver)  # Now using driver instead of car for the key
         
         if key not in records or time_ms < records[key]:
             # New record!
@@ -65,8 +65,8 @@ def check_record(track, car, driver, time_ms):
             records[key] = time_ms
             save_records(records)
             
-            msg = "NEW TRACK RECORD: {} at {}! Time: {} (Previous: {})".format(
-                car, track, format_time(time_ms), old_time
+            msg = "NEW TRACK RECORD: {} on {}! Time: {} by {} (Previous: {})".format(
+                car, track, format_time(time_ms), driver, old_time
             )
             ac.log("LapLogger: {}".format(msg))
             ac.console("LapLogger: {}".format(msg))
@@ -83,13 +83,20 @@ def get_current_record():
         track = ac.getTrackName(0)
         car = ac.getCarName(0)
         records = load_records()
-        key = (track, car)
+        best_time = float('inf')
+        best_driver = None
         
-        if key in records:
-            return records[key], None
+        # Find the best time for this track across all cars
+        for (rec_track, rec_car), time_ms in records.items():
+            if rec_track == track and time_ms < best_time:
+                best_time = time_ms
+                best_driver = rec_car  # We'll store driver name here
+        
+        if best_time != float('inf'):
+            return best_time, best_driver
     except Exception as e:
         ac.log("LapLogger Error getting current record: {}".format(str(e)))
-    return None, None, None
+    return None, None
 
 def acMain(ac_version):
     try:
@@ -119,11 +126,10 @@ def acMain(ac_version):
           # Create records file if it doesn't exist
         if not os.path.exists(records_file):
             save_records({})
-            
-        # Display current record if it exists
-        time_ms, _ = get_current_record()
+              # Display current record if it exists
+        time_ms, driver = get_current_record()
         if time_ms:
-            ac.setText(l_record_holder, "Track Record: {}".format(format_time(time_ms)))
+            ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), driver))
         
         ac.log("LapLogger: Window created successfully")
         return "LapLogger"
