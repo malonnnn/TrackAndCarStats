@@ -14,6 +14,7 @@ l_relative = 0
 lapcount = 0
 finished_cars = set()  # Track which cars we've logged finishes for
 records_file = "apps/python/LapLogger/track_records.csv"
+last_lap_times = {}  # Format: {car_id: last_lap_time}
 
 def format_time(ms):
     """Convert milliseconds to formatted time string"""
@@ -56,6 +57,9 @@ def save_records(records):
 def check_record(track, car, driver, time_ms):
     """Check if this is a new record and update if so"""
     try:
+        ac.log("LapLogger Debug: Checking record - Track: {}, Car: {}, Time: {}".format(
+            track, car, format_time(time_ms)))
+        
         records = load_records()
         current_key = (track, car)
         
@@ -66,6 +70,10 @@ def check_record(track, car, driver, time_ms):
             if rec_track == track and rec_time < track_best_time:
                 track_best_time = rec_time
                 track_best_car = rec_car
+        
+        ac.log("LapLogger Debug: Current track best - Time: {}, Car: {}".format(
+            format_time(track_best_time) if track_best_time != float('inf') else "none",
+            track_best_car or "none"))
         
         # Now check if we've beaten the track record
         is_track_record = track_best_time == float('inf') or time_ms < track_best_time
@@ -113,6 +121,19 @@ def get_current_record():
         ac.log("LapLogger Error getting current record: {}".format(str(e)))
     return None, None
 
+def get_car_best_time(car_id):
+    """Get the best time for a specific car on the current track from records"""
+    try:
+        track = ac.getTrackName(0)
+        car = ac.getCarName(car_id)
+        records = load_records()
+        key = (track, car)
+        if key in records:
+            return records[key]
+    except Exception as e:
+        ac.log("LapLogger Error getting car best time: {}".format(str(e)))
+    return None
+
 def acMain(ac_version):
     try:
         global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, l_record_holder, l_relative
@@ -132,11 +153,12 @@ def acMain(ac_version):
         l_best_time = ac.addLabel(appWindow, "Best: --:--.---")
         ac.setPosition(l_best_time, 3, 70)
         ac.setFontSize(l_best_time, 13)
-        
-        # Last lap time
+          # Last lap time
+        global l_last_lap
         l_last_lap = ac.addLabel(appWindow, "Last Lap: --:--.---")
         ac.setPosition(l_last_lap, 3, 100)
         ac.setFontSize(l_last_lap, 13)
+        ac.setSize(l_last_lap, 290, 20)  # Make label use full width
         
         # Record holder info
         l_record_holder = ac.addLabel(appWindow, "Track Record: None")
@@ -228,8 +250,8 @@ def acUpdate(deltaT):
         # Format display - make it more compact by using a single line
         relative_text = ""
         if ahead_name and behind_name:
-            # Show both gaps in format: "↑Car1 +1.234 ↓Car2 -0.567"
-            relative_text = "↑ {} +{} ↓ {} -{}".format(
+            # Show both gaps in format: "↑Car1 -1.234 ↓Car2 +0.567"
+            relative_text = "↑ {} -{} ↓ {} +{}".format(
                 ahead_name,
                 format_time(abs(ahead_gap)),
                 behind_name,
@@ -251,24 +273,63 @@ def acUpdate(deltaT):
             relative_text = "In Lead"
         
         ac.setText(l_relative, relative_text)
-        
-        # Update current lap time
-        current_time = ac.getCarState(0, acsys.CS.LapTime)
+          # Update current lap time
+        current_time = ac.getCarState(focused_car, acsys.CS.LapTime)
         if current_time > 0:
             ac.setText(l_current_time, "Current: {}".format(format_time(current_time)))
+        else:
+            ac.setText(l_current_time, "Current: --:--.---")        # Update best lap time - consider all sources
+        session_best = ac.getCarState(focused_car, acsys.CS.BestLap)
+        car_best = get_car_best_time(focused_car)
+        last_time = ac.getCarState(focused_car, acsys.CS.LastLap)
         
-        # Update best lap time
-        best_time = ac.getCarState(0, acsys.CS.BestLap)
-        if best_time > 0:
+        # Initialize best time to infinity
+        best_time = float('inf')
+        
+        # Check all potential sources for the best time
+        if session_best > 0:
+            best_time = session_best
+        if car_best and car_best < best_time:
+            best_time = car_best
+        if last_time > 0:  # Include last lap in case it's our first and best lap
+            if best_time == float('inf') or last_time < best_time:
+                best_time = last_time
+        
+        # Update display with the best time we found
+        if best_time != float('inf'):
             ac.setText(l_best_time, "Best: {}".format(format_time(best_time)))
+        else:
+            ac.setText(l_best_time, "Best: --:--.---")        # Track lap completions and update last lap time
+        global l_last_lap, l_record_holder  # Ensure we have access to the labels
+        current_laps = ac.getCarState(focused_car, acsys.CS.LapCount)
+        last_time = ac.getCarState(focused_car, acsys.CS.LastLap)
+        current_time = ac.getCarState(focused_car, acsys.CS.LapTime)
         
-        # Update last lap time
-        last_time = ac.getCarState(0, acsys.CS.LastLap)
-        if last_time > 0:
-            ac.setText(l_last_lap, "Last Lap: {}".format(format_time(last_time)))
+        try:
+            # Check for new completed laps
+            if last_time > 0 and (focused_car not in last_lap_times or last_time != last_lap_times[focused_car]):
+                ac.log("LapLogger Debug: Car {} completed lap with time {}".format(focused_car, format_time(last_time)))
+                last_lap_times[focused_car] = last_time
+                
+                # Check if this is a new record
+                track = ac.getTrackName(0)
+                car = ac.getCarName(focused_car)
+                driver = ac.getDriverName(focused_car)
+                if check_record(track, car, driver, last_time):
+                    # The display is already updated in check_record if it's a track record
+                    ac.log("LapLogger Debug: New track record set!")
+                
+            # Always update the display with the best information we have
+            if focused_car in last_lap_times and last_lap_times[focused_car] > 0:
+                lap_text = "Last Lap: {}".format(format_time(last_lap_times[focused_car]))
+                ac.log("LapLogger Debug: Setting last lap text to: {}".format(lap_text))
+                ac.setText(l_last_lap, lap_text)
+            else:
+                ac.setText(l_last_lap, "Last Lap: --:--.---")
+        except Exception as e:
+            ac.log("LapLogger Error updating last lap: {}".format(str(e)))
         
         # Update lap counter
-        current_laps = ac.getCarState(0, acsys.CS.LapCount)
         if current_laps > lapcount:
             lapcount = current_laps
             ac.setText(l_lapcount, "Laps: {}".format(lapcount))
