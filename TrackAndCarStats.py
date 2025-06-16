@@ -14,7 +14,7 @@ l_last_lap = 0
 l_relative = 0
 lapcount = 0
 finished_cars = set()  # Track which cars we've logged finishes for
-records_dir = "apps/python/LapLogger/records"  # Directory for track record files
+records_dir = "apps/python/TrackAndCarStats/records"  # Directory for track record files
 last_lap_times = {}  # Format: {car_id: last_lap_time}
 records_cache = {}  # Format: {track: {car: time_ms}}
 last_load_time = {}  # Format: {track: timestamp}
@@ -24,10 +24,10 @@ def get_track_records_file(track_name):
     # Ensure records directory exists
     if not os.path.exists(records_dir):
         os.makedirs(records_dir)
-        ac.log("LapLogger: Created records directory at {}".format(records_dir))
+        ac.log("TACS: Created records directory at {}".format(records_dir))
     
     records_file = os.path.join(records_dir, "{}.csv".format(track_name))
-    ac.log("LapLogger: Track records file path: {}".format(records_file))
+    ac.log("TACS: Track records file path: {}".format(records_file))
     return records_file
 
 def format_time(ms):
@@ -54,7 +54,7 @@ def load_track_records(track):
     
     records = {}  # Format: {car: time_ms}
     try:
-        ac.log("LapLogger: Loading records for track: {}".format(track))
+        ac.log("TACS: Loading records for track: {}".format(track))
         records_file = get_track_records_file(track)
         
         if os.path.exists(records_file):
@@ -68,11 +68,11 @@ def load_track_records(track):
                             car, time_ms = row[0], row[1]  # Use indexing to be safer
                             records[car] = int(time_ms)  # Convert time to integer
                     except (ValueError, IndexError) as e:
-                        ac.log("LapLogger Warning: Skipping invalid row in {}: {}".format(track, str(e)))
+                        ac.log("TACS Warning: Skipping invalid row in {}: {}".format(track, str(e)))
             
-            ac.log("LapLogger: Loaded {} records for track {}".format(len(records), track))
+            ac.log("TACS: Loaded {} records for track {}".format(len(records), track))
         else:
-            ac.log("LapLogger: No existing records file, creating new one")
+            ac.log("TACS: No existing records file, creating new one")
             # Create directory if it doesn't exist
             records_dir = os.path.dirname(records_file)
             if not os.path.exists(records_dir):
@@ -83,7 +83,7 @@ def load_track_records(track):
                 writer.writerow(['Car', 'Time_ms'])  # Write header
             
     except Exception as e:
-        ac.log("LapLogger Error loading records for {}: {}".format(track, str(e)))
+        ac.log("TACS Error loading records for {}: {}".format(track, str(e)))
     
     # Update cache
     records_cache[track] = records.copy()
@@ -106,14 +106,14 @@ def save_track_records(track, records):
         records_cache[track] = records.copy()
         last_load_time[track] = time.time()
         
-        ac.log("LapLogger: Saved {} records for track {}".format(len(records), track))
+        ac.log("TACS: Saved {} records for track {}".format(len(records), track))
     except Exception as e:
-        ac.log("LapLogger Error saving records for {}: {}".format(track, str(e)))
+        ac.log("TACS Error saving records for {}: {}".format(track, str(e)))
 
 def check_record(track, car, driver, time_ms):
     """Check if this is a new record and update if so"""
     try:
-        ac.log("LapLogger Debug: Checking record - Track: {}, Car: {}, Time: {}".format(
+        ac.log("TACS Debug: Checking record - Track: {}, Car: {}, Time: {}".format(
             track, car, format_time(time_ms)))
         
         records = load_track_records(track)
@@ -126,7 +126,7 @@ def check_record(track, car, driver, time_ms):
                 track_best_time = rec_time
                 track_best_car = record_car
         
-        ac.log("LapLogger Debug: Current track best - Time: {}, Car: {}".format(
+        ac.log("TACS Debug: Current track best - Time: {}, Car: {}".format(
             format_time(track_best_time) if track_best_time != float('inf') else "none",
             track_best_car or "none"))
         
@@ -144,16 +144,16 @@ def check_record(track, car, driver, time_ms):
                 msg = "NEW TRACK RECORD: {} on {}! Time: {} (Previous: {})".format(
                     car, track, format_time(time_ms), format_time(track_best_time) if track_best_time != float('inf') else "none"
                 )
-                ac.log("LapLogger: {}".format(msg))
-                ac.console("LapLogger: {}".format(msg))
-                ac.console("LapLogger: View all records in: apps/python/LapLogger/viewer.html")
+                ac.log("TACS: {}".format(msg))
+                ac.console("TACS: {}".format(msg))
+                ac.console("TACS: View all records in: apps/python/TACS/viewer.html")
                 
                 # Update the display immediately
                 ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), car))
             
             return is_track_record
     except Exception as e:
-        ac.log("LapLogger Error checking record: {}".format(str(e)))
+        ac.log("TACS Error checking record: {}".format(str(e)))
     return False
 
 def get_current_record():
@@ -173,7 +173,7 @@ def get_current_record():
         if best_time != float('inf'):
             return best_time, best_car
     except Exception as e:
-        ac.log("LapLogger Error getting current record: {}".format(str(e)))
+        ac.log("TACS Error getting current record: {}".format(str(e)))
     return None, None
 
 def get_car_best_time(car_id):
@@ -185,7 +185,7 @@ def get_car_best_time(car_id):
         if car in records:
             return records[car]
     except Exception as e:
-        ac.log("LapLogger Error getting car best time: {}".format(str(e)))
+        ac.log("TACS Error getting car best time: {}".format(str(e)))
     return None
 
 def acMain(ac_version):
@@ -193,7 +193,7 @@ def acMain(ac_version):
         global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, l_record_holder, l_relative
 
         
-        appWindow = ac.newApp("LapLogger")
+        appWindow = ac.newApp("TACS")
         ac.setSize(appWindow, 300, 280)  # Increased width to 300
         ac.setTitle(appWindow, "")  # Remove title bar text to save space
         
@@ -229,7 +229,7 @@ def acMain(ac_version):
         ac.setSize(l_relative, 290, 20)  # Make label use full width        # Create records directory if it doesn't exist
         if not os.path.exists(records_dir):
             os.makedirs(records_dir)
-            ac.log("LapLogger: Created records directory")
+            ac.log("TACS: Created records directory")
         
         # Display current record if it exists
         time_ms, driver = get_current_record()
@@ -237,11 +237,11 @@ def acMain(ac_version):
             ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), driver))
   
         
-        ac.log("LapLogger: Window created successfully")
-        return "LapLogger"
+        ac.log("TACS: Window created successfully")
+        return "TACS"
     except Exception as e:
-        ac.log("LapLogger Error: {}".format(str(e)))
-        return "LapLogger"
+        ac.log("TACS Error: {}".format(str(e)))
+        return "TACS"
 
 def acUpdate(deltaT):
     try:
@@ -366,7 +366,7 @@ def acUpdate(deltaT):
         try:
             # Check for new completed laps
             if last_time > 0 and (focused_car not in last_lap_times or last_time != last_lap_times[focused_car]):
-                ac.log("LapLogger Debug: Car {} completed lap with time {}".format(focused_car, format_time(last_time)))
+                ac.log("TACS Debug: Car {} completed lap with time {}".format(focused_car, format_time(last_time)))
                 last_lap_times[focused_car] = last_time
                 
                 # Check if this is a new record
@@ -375,23 +375,23 @@ def acUpdate(deltaT):
                 driver = ac.getDriverName(focused_car)
                 if check_record(track, car, driver, last_time):
                     # The display is already updated in check_record if it's a track record
-                    ac.log("LapLogger Debug: New track record set!")
+                    ac.log("TACS Debug: New track record set!")
                 
             # Always update the display with the best information we have
             if focused_car in last_lap_times and last_lap_times[focused_car] > 0:
                 lap_text = "Last Lap: {}".format(format_time(last_lap_times[focused_car]))
-                ac.log("LapLogger Debug: Setting last lap text to: {}".format(lap_text))
+                ac.log("TACS Debug: Setting last lap text to: {}".format(lap_text))
                 ac.setText(l_last_lap, lap_text)
             else:
                 ac.setText(l_last_lap, "Last Lap: --:--.---")
         except Exception as e:
-            ac.log("LapLogger Error updating last lap: {}".format(str(e)))
+            ac.log("TACS Error updating last lap: {}".format(str(e)))
         
         # Update lap counter
         if current_laps > lapcount:
             lapcount = current_laps
             ac.setText(l_lapcount, "Laps: {}".format(lapcount))
-            ac.log("LapLogger: Lap completed: {}".format(lapcount))
+            ac.log("TACS: Lap completed: {}".format(lapcount))
             
             # Reset best sectors for the new lap
             best_sector1 = float('inf')
@@ -424,8 +424,8 @@ def acUpdate(deltaT):
                     msg = "P{} - {} in {} finished at {} with time {}".format(
                         position, driver, car, track, format_time(time_ms)
                     )
-                    ac.log("LapLogger: {}".format(msg))
-                    ac.console("LapLogger: {}".format(msg))
+                    ac.log("TACS: {}".format(msg))
+                    ac.console("TACS: {}".format(msg))
                     
                     # Check if this is a new record
                     if check_record(track, car, driver, time_ms):
@@ -435,7 +435,7 @@ def acUpdate(deltaT):
                     finished_cars.add(car_id)
     
     except Exception as e:
-        ac.log("LapLogger Error in update: {}".format(str(e)))
+        ac.log("TACS Error in update: {}".format(str(e)))
 
 def acShutdown():
-    ac.log("LapLogger: Shutting down")
+    ac.log("TACS: Shutting down")

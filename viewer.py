@@ -7,10 +7,10 @@ from tkinter import ttk, messagebox
 from operator import itemgetter
 from collections import defaultdict
 
-class LapLoggerViewer:
+class TrackAndCarStatsViewer:
     def __init__(self, root):
         self.root = root
-        self.root.title("LapLogger Records Viewer")
+        self.root.title("TNCS Records Viewer")
         self.root.geometry("600x400")
         
         # Create main frame
@@ -160,7 +160,7 @@ class LapLoggerViewer:
 if __name__ == '__main__':
     try:
         root = tk.Tk()
-        app = LapLoggerViewer(root)
+        app = TrackAndCarStatsViewer(root)
         root.mainloop()
     except Exception as e:
         messagebox.showerror("Error", f"An error occurred: {str(e)}")
