@@ -24,6 +24,17 @@ last_displayed_text = {}  # Store last displayed text for each label
 cached_record_time = None
 cached_record_car = None
 
+def get_track_layout():
+    """Get the current track layout configuration"""
+    try:
+        # Get the track configuration from AC's API
+        track_config = ac.getTrackConfiguration(0)
+        if track_config and track_config.strip():
+            return track_config.lower()
+        return "default"  # Default layout if none specified
+    except:
+        return "default"
+
 def get_track_records_file(track_name):
     """Get the records file path for a specific track"""
     # Ensure records directory exists
@@ -31,7 +42,12 @@ def get_track_records_file(track_name):
         os.makedirs(records_dir)
         ac.log("TACS: Created records directory at {}".format(records_dir))
     
-    records_file = os.path.join(records_dir, "{}.csv".format(track_name))
+    # Get track layout
+    layout = get_track_layout()
+    
+    # Create filename with the new naming convention
+    filename = "{}_{}.csv".format(track_name, layout)
+    records_file = os.path.join(records_dir, filename)
     ac.log("TACS: Track records file path: {}".format(records_file))
     return records_file
 
@@ -212,6 +228,17 @@ def get_car_best_time(car_id):
     except Exception as e:
         ac.log("TACS Error getting car best time: {}".format(str(e)))
     return None
+
+def get_track_layout():
+    """Get the current track layout configuration"""
+    try:
+        # Get the track configuration from AC's API
+        track_config = ac.getTrackConfiguration(0)
+        if track_config and track_config.strip():
+            return track_config.lower()
+        return "default"  # Default layout if none specified
+    except:
+        return "default"
 
 def acMain(ac_version):
     try:
