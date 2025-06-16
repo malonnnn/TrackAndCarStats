@@ -57,43 +57,58 @@ def check_record(track, car, driver, time_ms):
     """Check if this is a new record and update if so"""
     try:
         records = load_records()
-        key = (track, driver)  # Now using driver instead of car for the key
+        current_key = (track, car)
         
-        if key not in records or time_ms < records[key]:
-            # New record!
-            old_time = format_time(records[key]) if key in records else "none"
-            records[key] = time_ms
+        # First check if this is a track record (best time for this track across all cars)
+        track_best_time = float('inf')
+        track_best_car = None
+        for (rec_track, rec_car), rec_time in records.items():
+            if rec_track == track and rec_time < track_best_time:
+                track_best_time = rec_time
+                track_best_car = rec_car
+        
+        # Now check if we've beaten the track record
+        is_track_record = track_best_time == float('inf') or time_ms < track_best_time
+        
+        # Update the car-specific record
+        if current_key not in records or time_ms < records[current_key]:
+            old_time = format_time(records[current_key]) if current_key in records else "none"
+            records[current_key] = time_ms
             save_records(records)
             
-            msg = "NEW TRACK RECORD: {} on {}! Time: {} by {} (Previous: {})".format(
-                car, track, format_time(time_ms), driver, old_time
-            )
-            ac.log("LapLogger: {}".format(msg))
-            ac.console("LapLogger: {}".format(msg))
-            ac.console("LapLogger: View all records in: apps/python/LapLogger/viewer.html")
+            # Only announce if it's a track record
+            if is_track_record:
+                msg = "NEW TRACK RECORD: {} on {}! Time: {} (Previous: {})".format(
+                    car, track, format_time(time_ms), format_time(track_best_time) if track_best_time != float('inf') else "none"
+                )
+                ac.log("LapLogger: {}".format(msg))
+                ac.console("LapLogger: {}".format(msg))
+                ac.console("LapLogger: View all records in: apps/python/LapLogger/viewer.html")
+                
+                # Update the display immediately
+                ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), car))
             
-            return True
+            return is_track_record
     except Exception as e:
         ac.log("LapLogger Error checking record: {}".format(str(e)))
     return False
 
 def get_current_record():
-    """Get the current record for the active car/track combination"""
+    """Get the current record for the active track"""
     try:
         track = ac.getTrackName(0)
-        car = ac.getCarName(0)
         records = load_records()
         best_time = float('inf')
-        best_driver = None
+        best_car = None
         
         # Find the best time for this track across all cars
         for (rec_track, rec_car), time_ms in records.items():
             if rec_track == track and time_ms < best_time:
                 best_time = time_ms
-                best_driver = rec_car  # We'll store driver name here
+                best_car = rec_car
         
         if best_time != float('inf'):
-            return best_time, best_driver
+            return best_time, best_car
     except Exception as e:
         ac.log("LapLogger Error getting current record: {}".format(str(e)))
     return None, None
@@ -102,27 +117,38 @@ def acMain(ac_version):
     try:
         global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, l_record_holder, l_relative
         appWindow = ac.newApp("LapLogger")
-        ac.setSize(appWindow, 200, 280)
+        ac.setSize(appWindow, 300, 280)  # Increased width to 300
+        ac.setTitle(appWindow, "")  # Remove title bar text to save space
         
         # Labels for lap info
         l_lapcount = ac.addLabel(appWindow, "Laps: 0")
         ac.setPosition(l_lapcount, 3, 30)
+        ac.setFontSize(l_lapcount, 13)
         
         l_current_time = ac.addLabel(appWindow, "Current: --:--.---")
         ac.setPosition(l_current_time, 3, 50)
+        ac.setFontSize(l_current_time, 13)
         
         l_best_time = ac.addLabel(appWindow, "Best: --:--.---")
         ac.setPosition(l_best_time, 3, 70)
-          # Last lap time
+        ac.setFontSize(l_best_time, 13)
+        
+        # Last lap time
         l_last_lap = ac.addLabel(appWindow, "Last Lap: --:--.---")
         ac.setPosition(l_last_lap, 3, 100)
-          # Record holder info
+        ac.setFontSize(l_last_lap, 13)
+        
+        # Record holder info
         l_record_holder = ac.addLabel(appWindow, "Track Record: None")
         ac.setPosition(l_record_holder, 3, 130)
+        ac.setFontSize(l_record_holder, 13)
+        ac.setSize(l_record_holder, 290, 20)  # Make label use full width
         
         # Relative timing info
         l_relative = ac.addLabel(appWindow, "")
         ac.setPosition(l_relative, 3, 160)
+        ac.setFontSize(l_relative, 13)
+        ac.setSize(l_relative, 290, 20)  # Make label use full width
           # Create records file if it doesn't exist
         if not os.path.exists(records_file):
             save_records({})
