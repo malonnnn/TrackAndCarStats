@@ -2,8 +2,6 @@ import os
 import csv
 import tkinter as tk
 from tkinter import ttk, messagebox
-import tkinter as tk
-from tkinter import ttk, messagebox
 from operator import itemgetter
 from collections import defaultdict
 
@@ -39,13 +37,15 @@ class TrackAndCarStatsViewer:
         scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.tree.yview)
         scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
         self.tree.configure(yscrollcommand=scrollbar.set)
-          # Track sort state
+        
+        # Track sort state
         self.sort_states = {
             "track": False,  # False = ascending, True = descending
             "time_ms": False,
             "car": False
         }
-          # Map between internal keys and display columns
+        
+        # Map between internal keys and display columns
         self.column_map = {
             "track": "Track",
             "time_ms": "Time",
@@ -88,19 +88,20 @@ class TrackAndCarStatsViewer:
         return f"{minutes:d}:{seconds:06.3f}"
 
     def load_records(self):
-        """Load records from all track CSV files"""        records_dir = os.path.join(os.path.dirname(__file__), "records").replace('\\', '/')
+        """Load records from all track CSV files"""
+        records_dir = normalize_path(os.path.join(os.path.dirname(__file__), "records"))
         self.records = []
         
         if not os.path.exists(records_dir):
             messagebox.showwarning("No Records", "No lap records found.")
             return
-            
+        
         try:
             # Load records from each track file
             for file in os.listdir(records_dir):
                 if file.endswith(".csv"):
                     track_name = file[:-4]  # Remove .csv extension
-                    track_file = os.path.join(records_dir, file).replace('\\', '/')
+                    track_file = normalize_path(os.path.join(records_dir, file))
                     
                     with open(track_file, 'r') as f:
                         reader = csv.reader(f)
@@ -120,7 +121,7 @@ class TrackAndCarStatsViewer:
             
             # Display records
             self.filter_records()
-            
+        
         except Exception as e:
             messagebox.showerror("Error", f"Error loading records: {str(e)}")
 
@@ -166,4 +167,4 @@ if __name__ == '__main__':
         app = TrackAndCarStatsViewer(root)
         root.mainloop()
     except Exception as e:
-        messagebox.showerror("Error", f"An error occurred: {str(e)}")
+        messagebox.showerror("Error", f"Application error: {str(e)}")
