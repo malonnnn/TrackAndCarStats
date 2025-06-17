@@ -93,56 +93,68 @@ class TrackAndCarStatsViewer:
 
     def load_records(self):
         """Load records from all track CSV files located in the 'records' subdirectory."""
-        # This path assumes the script is run from the `TrackAndCarStats` folder.
-        script_dir = os.path.dirname(__file__)
-        records_dir = normalize_path(os.path.join(script_dir, "records"))
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        records_dir = os.path.join(script_dir, "records")
         self.all_records = []
         
-        if not os.path.exists(records_dir) or not os.listdir(records_dir):
-            messagebox.showwarning("No Records Found", 
-                                   "The 'records' directory is empty or missing.\n\n"
-                                   "Please ensure this script is in the 'TrackAndCarStats' app folder and that you have completed some laps in Assetto Corsa.")
+        if not os.path.exists(records_dir):
+            messagebox.showerror("Directory Not Found", 
+                             f"The records directory was not found at:\n{records_dir}")
             return
         
-        try:
-            for filename in os.listdir(records_dir):
-                if filename.endswith(".csv"):
-                    track_name = filename[:-4]  # Remove .csv extension
-                    track_file = normalize_path(os.path.join(records_dir, filename))
-                    
-                    with open(track_file, 'r', newline='') as f:
-                        reader = csv.reader(f)
-                        try:
-                            header = next(reader)  # Skip header
-                        except StopIteration:
-                            continue # Skip empty files
-
-                        # This logic correctly parses the CSV from the AC app
-                        for row in reader:
-                            if len(row) >= 3:
-                                technical_name, time_ms_str, display_name = row[:3]
-                                car_name = display_name.strip() if display_name.strip() else technical_name
-                                try:
-                                    self.all_records.append({
-                                        'track': track_name,
-                                        'car': car_name,
-                                        'time_ms': int(time_ms_str)
-                                    })
-                                except ValueError:
-                                    # Skip rows with invalid time
-                                    continue
-            
-            # Update track list in the combobox
-            track_names = sorted(list(set(r['track'] for r in self.all_records)))
-            track_names.insert(0, "All Tracks")
-            self.track_combo['values'] = track_names
-            
-            # Initial filter and display
-            self.filter_records()
+        csv_files = [f for f in os.listdir(records_dir) if f.endswith('.csv')]
+        if not csv_files:
+            messagebox.showwarning("No Records Found", 
+                           f"No CSV files found in:\n{records_dir}")
+            return
         
-        except Exception as e:
-            messagebox.showerror("Error Loading Records", "An error occurred while reading the record files:\n\n{}".format(e))
-
+        for filename in csv_files:
+            # Extract track name from filename (remove rt_ prefix and .csv extension)
+            track_name = os.path.splitext(filename)[0]
+            if track_name.startswith('rt_'):
+                track_name = track_name[3:]  # Remove 'rt_' prefix
+            track_name = track_name.replace('_', ' ').title()  # Format for display
+            
+            track_file = os.path.join(records_dir, filename)
+            
+            try:
+                with open(track_file, 'r', newline='', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)  # Use DictReader to read by column names
+                    for row in reader:
+                        try:
+                            car_name = row['CarName']
+                            time_ms = int(row['Time_ms'])
+                            
+                            if time_ms <= 0:
+                                continue
+                                
+                            self.all_records.append({
+                                'track': track_name,
+                                'car': car_name,
+                                'time_ms': time_ms
+                            })
+                        except (KeyError, ValueError) as e:
+                            print(f"Error processing row in {filename}: {str(e)}")
+                            continue
+                        
+            except Exception as e:
+                print(f"Error processing {filename}: {str(e)}")
+                continue
+    
+        if not self.all_records:
+            messagebox.showwarning("No Valid Records", 
+                           "No valid records were found in any of the CSV files.")
+            return
+        
+        # Update track list in the combobox
+        track_names = sorted(list(set(r['track'] for r in self.all_records)))
+        track_names.insert(0, "All Tracks")
+        self.track_combo['values'] = track_names
+        self.track_var.set("All Tracks")
+        
+        # Initial filter and display
+        self.filter_records()
+        
     def sort_records(self, key):
         """Sort currently displayed records by the given key and update the treeview."""
         # Toggle sort state for the clicked column
