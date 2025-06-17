@@ -204,8 +204,10 @@ def check_record(track, car, driver, time_ms):
             save_track_records(track, records)
             
             if is_track_record:
-                msg = "NEW TRACK RECORD: {} - {} (Previous: {})".format(
-                    car, format_time(time_ms), format_time(track_best_time) if track_best_time != float('inf') else "none"
+                msg = "NEW TRACK RECORD: {} - {} (Previous: {} by {})".format(
+                    car, format_time(time_ms), 
+                    format_time(track_best_time) if track_best_time != float('inf') else "none",
+                    track_best_car if track_best_car else "none"
                 )
                 ac.log("TACS: {}".format(msg))
                 ac.console("TACS: {}".format(msg))
