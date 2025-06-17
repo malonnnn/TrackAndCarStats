@@ -239,7 +239,7 @@ def acMain(ac_version):
         ac.setSize(app_window, 300, 340)
         ac.setTitle(app_window, "")
         ac.drawBorder(app_window, 0)
-        ac.setBackgroundOpacity(app_window, 0.5)
+        ac.setBackgroundOpacity(app_window, 0.9)
 
         y_pos = 10
         l_lapcount = ac.addLabel(app_window, "Laps: 0"); ac.setPosition(l_lapcount, 10, y_pos); y_pos += 22
@@ -307,8 +307,10 @@ def update_relative_display(focused_car_id):
         gap = ahead_spline_pos - my_spline_pos
         if gap < -0.5: gap += 1.0
         time_gap = (gap * track_len) / (my_speed or 1)
-        car_name_short = ac.getCarName(ahead_car_id)[:8]
-        ahead_text = u"↑{:.8s} -{:.1f}".format(car_name_short, time_gap)
+        # --- MODIFICATION START ---
+        car_name = ac.getCarName(ahead_car_id)
+        ahead_text = u"{} ↑ -{:.1f}".format(car_name, time_gap)
+        # --- MODIFICATION END ---
 
     behind_text = ""
     if my_leaderboard_index < len(leaderboard) - 1:
@@ -318,8 +320,10 @@ def update_relative_display(focused_car_id):
         gap = my_spline_pos - behind_spline_pos
         if gap < -0.5: gap += 1.0
         time_gap = (gap * track_len) / (car_behind_speed or 1)
-        car_name_short = ac.getCarName(behind_car_id)[:8]
-        behind_text = u"↓{:.8s} +{:.1f}".format(car_name_short, time_gap)
+        # --- MODIFICATION START ---
+        car_name = ac.getCarName(behind_car_id)
+        behind_text = u"{} ↓ +{:.1f}".format(car_name, time_gap)
+        # --- MODIFICATION END ---
         
     final_text = "{}   {}".format(ahead_text, behind_text).strip()
     update_label_if_changed(l_relative, final_text)
