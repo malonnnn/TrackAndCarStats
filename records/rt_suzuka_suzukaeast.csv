@@ -1,13 +1,3 @@
-Car,Time_ms
-cky_koenigsegg_jesko,46628
-dg_isdera_commendatore_112i_beta,54962
-bugatti_veyron_ss,49688
-bmw_z4_gt3,50967
-slang_diablo_sv,57183
-ks_mclaren_f1_gtr,50826
-mrdk_koenigsegg_agera_rs,47061
-tmw_jaguar_xjr15_race,53599
-koenigsegg_jesko_absolut,49727
-fx_ferrari_488_gt_evo_street,49598
-rtm_bmw_nazca_c2_tune01,54896
-ds666_jaguar_xj220s,55270
+CarName,Time_ms
+ks_ferrari_f2004,36411
+ad_mclaren_f1,53941

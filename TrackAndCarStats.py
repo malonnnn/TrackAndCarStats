@@ -5,556 +5,388 @@ import os
 import csv
 import time
 from datetime import datetime
+import traceback # Import traceback for better error logging
 
-l_lapcount = 0
-l_current_time = 0
-l_best_time = 0
-l_record_holder = 0
-l_last_lap = 0
-l_relative = 0
-lapcount = 0
-finished_cars = set()  # Track which cars we've logged finishes for
-records_dir = "apps/python/TrackAndCarStats/records"  # Directory for track record files, using forward slashes for consistency
-last_lap_times = {}  # Format: {car_id: last_lap_time}
-records_cache = {}  # Format: {track: {car: time_ms}}
-last_load_time = {}  # Format: {track: timestamp}
-last_ui_update = 0  # Track when we last updated the UI with record information
-UI_UPDATE_INTERVAL = 0.5  # Update UI with record information every 0.5 seconds (more responsive)
-last_displayed_text = {}  # Store last displayed text for each label
-cached_record_time = None
-cached_record_car = None
-l_recent_records = []  # List to store labels for recent records
-MAX_RECORDS = 6  # Number of recent records to display
+# --- Global UI and State Variables ---
+app_window = 0
+l_lapcount, l_current_time, l_best_time, l_record_holder, l_last_lap, l_relative = (0,) * 6
+l_recent_records = []
+
+# --- Configuration ---
+RECORDS_DIR = "apps/python/TrackAndCarStats/records"
+UI_UPDATE_INTERVAL = 0.5  # How often to update slower-changing UI elements
+MAX_RECORDS_DISPLAY = 6   # Number of recent records to display
+
+# --- Caches and State Management ---
+app_state = {
+    'full_track_name': None,
+    'lap_count': 0,
+    'last_ui_update': 0
+}
+last_lap_times = {}       # {car_id: last_lap_time_ms}
+records_cache = {}        # {track_name: {car_tech_name: time_ms}}
+last_displayed_text = {}  # {label_widget: "text"} - To prevent redundant ac.setText calls
+
+# --- Helper Functions ---
+
+def update_label_if_changed(label, new_text):
+    """Avoids calling ac.setText if the label's text has not changed."""
+    global last_displayed_text
+    if label not in last_displayed_text or last_displayed_text[label] != new_text:
+        ac.setText(label, new_text)
+        last_displayed_text[label] = new_text
+
+def normalize_path(path):
+    """Normalizes a path to use forward slashes, which is safer across systems."""
+    return path.replace('\\', '/')
+
+def format_time(ms):
+    """Converts milliseconds to a formatted time string MM:SS.mmm."""
+    if not isinstance(ms, (int, float)) or ms <= 0:
+        return "N/A"
+    
+    seconds = ms / 1000.0
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    return "{:d}:{:06.3f}".format(minutes, secs)
+
+# --- Core Logic Functions ---
 
 def get_track_layout():
-    """Get the current track layout configuration"""
+    """Gets the current track layout, defaulting to 'default'."""
     try:
-        # Get the track configuration from AC's API
         track_config = ac.getTrackConfiguration(0)
-        if track_config and track_config.strip():
-            return track_config.lower()
-        return "default"  # Default layout if none specified
-    except:
+        return track_config.lower() if track_config and track_config.strip() else "default"
+    except Exception as e:
+        ac.log("TACS Warning: Could not get track layout. {}. Defaulting to 'default'".format(e))
         return "default"
 
 def get_full_track_name():
-    """Get the track name including its configuration"""
+    """Gets the track name including its layout, e.g., 'ks_nordschleife_endurance'."""
     track_name = ac.getTrackName(0)
     layout = get_track_layout()
     return "{}_{}".format(track_name, layout)
 
-def normalize_path(path):
-    """Normalize a path to use forward slashes"""
-    return path.replace('\\', '/')
-
 def get_track_records_file(track_name):
-    """Get the records file path for a specific track"""
-    # Ensure records directory exists
-    if not os.path.exists(records_dir):
-        os.makedirs(records_dir)
-        ac.log("TACS: Created records directory at {}".format(normalize_path(records_dir)))
-    
-    records_file = normalize_path(os.path.join(records_dir, "{}.csv".format(track_name)))
-    ac.log("TACS: Track records file path: {}".format(records_file))
-    return records_file
-
-def format_time(ms):
-    """Convert milliseconds to formatted time string"""
-    if ms <= 0:
-        return "invalid"
-    
-    total_seconds = ms / 1000
-    minutes = int(total_seconds // 60)
-    seconds = total_seconds % 60
-    
-    # For lap times, we typically don't need hours, just MM:SS.mmm
-    return "{:d}:{:06.3f}".format(minutes, seconds)
+    """Constructs the full, normalized path to a track's records file."""
+    if not os.path.exists(RECORDS_DIR):
+        try:
+            os.makedirs(RECORDS_DIR)
+            ac.log("TACS: Created records directory at {}".format(normalize_path(RECORDS_DIR)))
+        except OSError as e:
+            ac.log("TACS Error: Could not create records directory: {}".format(e))
+            return None
+            
+    return normalize_path(os.path.join(RECORDS_DIR, "{}.csv".format(track_name)))
 
 def load_track_records(track):
-    """Load records for a specific track, using cache if available"""
-    global records_cache, last_load_time
-    current_time = time.time()
-    # Use cache if available and less than 60 seconds old
-    if track in records_cache and track in last_load_time:
-        if current_time - last_load_time[track] < 60:  # Cache for 60 seconds
-            return records_cache[track].copy()  # Return a copy to prevent cache modification
-        else:
-            ac.log("TACS Debug: Cache expired for track {} (age: {:.1f}s)".format(
-                track, current_time - last_load_time[track]))
-    
-    records = {}  # Format: {car: time_ms}
+    """Loads records for a specific track. Now uses a simplified {name: time} format."""
+    if track in records_cache:
+        return records_cache[track]
+
+    records = {}
+    records_file = get_track_records_file(track)
+    if not records_file:
+        return {}
+
     try:
-        ac.log("TACS: Loading records for track: {}".format(track))
-        records_file = get_track_records_file(track)
-        
         if os.path.exists(records_file):
             with open(records_file, 'r', newline='') as f:
                 reader = csv.reader(f)
-                next(reader)  # Skip header row (Car,Time_ms)
+                try:
+                    next(reader) 
+                except StopIteration:
+                    pass
                 
                 for row in reader:
                     try:
-                        if len(row) >= 2:  # Make sure we have both car and time
-                            car, time_ms = row[0], row[1]  # Use indexing to be safer
-                            records[car] = int(time_ms)  # Convert time to integer
-                    except (ValueError, IndexError) as e:
-                        ac.log("TACS Warning: Skipping invalid row in {}: {}".format(track, str(e)))
-            
-            ac.log("TACS: Loaded {} records for track {}".format(len(records), track))
+                        if len(row) >= 2:
+                            records[row[0]] = int(row[1])
+                    except (ValueError, IndexError):
+                        pass
         else:
-            ac.log("TACS: No existing records file, creating new one")
-            # Create directory if it doesn't exist            records_path = os.path.dirname(records_file)
-            if not os.path.exists(records_path):
-                os.makedirs(records_path)
-                
             with open(records_file, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['Car', 'Time_ms'])  # Write header
-            
+                writer.writerow(['CarName', 'Time_ms'])
+            ac.log("TACS: Created new records file for {}".format(track))
+
     except Exception as e:
-        ac.log("TACS Error loading records for {}: {}".format(track, str(e)))
-    
-    # Update cache
-    records_cache[track] = records.copy()
-    last_load_time[track] = current_time
-    
+        ac.log("TACS Error loading records for {}: {}".format(track, traceback.format_exc()))
+
+    records_cache[track] = records
     return records
 
 def save_track_records(track, records):
-    """Save records for a specific track"""
-    global records_cache, last_load_time
+    """Saves all records for a specific track using the simplified 2-column format."""
+    records_file = get_track_records_file(track)
+    if not records_file:
+        return
+
     try:
-        records_file = get_track_records_file(track)
         with open(records_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['Car', 'Time_ms'])  # Write header
-            for car, time_ms in records.items():
-                writer.writerow([car, time_ms])
+            writer.writerow(['CarName', 'Time_ms'])
+            sorted_records = sorted(records.items(), key=lambda item: item[1])
+            for technical_name, time_ms in sorted_records:
+                writer.writerow([technical_name, time_ms])
         
-        # Update cache with the new records
-        records_cache[track] = records.copy()
-        last_load_time[track] = time.time()
-        
-        ac.log("TACS: Saved {} records for track {}".format(len(records), track))
+        records_cache[track] = dict(sorted_records)
+        ac.log("TACS: Successfully saved {} records for track {}".format(len(records), track))
+
     except Exception as e:
-        ac.log("TACS Error saving records for {}: {}".format(track, str(e)))
+        ac.log("TACS Error saving records for {}: {}".format(track, traceback.format_exc()))
 
-def force_update_labels():
-    """Force an immediate update of all record-related labels"""
-    if l_record_holder:
-        ac.setVisible(l_record_holder, False)
-        ac.setVisible(l_record_holder, True)
-    
-    if l_recent_records:
-        for label in l_recent_records:
-            text = ac.getText(label)
-            if text.strip():  # Only force update non-empty labels
-                ac.setVisible(label, False)
-                ac.setVisible(label, True)
-
-def update_recent_record(message):
-    """Update the recent records display with a new message"""
-    global l_recent_records
-    # Skip if we don't have any labels yet
-    if not l_recent_records:
-        return
+def update_recent_record_display(message):
+    """Updates the recent records display area with a new message at the top."""
+    if not l_recent_records: return
     
     try:
-        ac.log("TACS: Updating recent records with: {}".format(message))
-        # Shift existing messages down
         for i in range(len(l_recent_records) - 1, 0, -1):
             text = ac.getText(l_recent_records[i-1])
-            ac.setText(l_recent_records[i], text)
+            update_label_if_changed(l_recent_records[i], text)
         
-        # Add new message at top
-        if len(l_recent_records) > 0:
-            ac.setText(l_recent_records[0], message)
-            
-        # Force visible refresh of all non-empty labels
+        update_label_if_changed(l_recent_records[0], message)
+        
         for label in l_recent_records:
             if ac.getText(label).strip():
                 ac.setVisible(label, False)
                 ac.setVisible(label, True)
     except Exception as e:
-        ac.log("TACS Error in update_recent_record: {}".format(str(e)))
+        ac.log("TACS Error in update_recent_record_display: {}".format(e))
 
-def check_record(track, car, driver, time_ms):
-    """Check if this is a new record and update if so"""
+def check_and_update_record(track, car_id, lap_time_ms):
+    """Checks if a new lap is a record and updates the files and UI with comparison info."""
     try:
-        ac.log("TACS Debug: Checking record - Track: {}, Car: {}, Time: {}".format(
-            track, car, format_time(time_ms)))
-        
+        technical_name = ac.getCarName(car_id)
+        if not technical_name: return
+
         records = load_track_records(track)
         
-        # First check if this is a track record (best time for this track across all cars)
-        track_best_time = float('inf')
-        track_best_car = None
-        for record_car, rec_time in records.items():
-            if rec_time < track_best_time:
-                track_best_time = rec_time
-                track_best_car = record_car
+        previous_car_record = records.get(technical_name, float('inf'))
+        previous_track_best_time, previous_track_best_car = get_current_track_record(records)
         
-        # Now check if we've beaten the track record
-        is_track_record = track_best_time == float('inf') or time_ms < track_best_time
-        
-        # Update the car-specific record
-        if car not in records or time_ms < records[car]:
-            old_car_time = records[car] if car in records else None
-            records[car] = time_ms
+        if lap_time_ms < previous_car_record:
+            
+            is_track_record = lap_time_ms < previous_track_best_time
+            
+            msg = ""
+            if is_track_record:
+                if previous_track_best_time != float('inf'):
+                    comparison_info = "(Previous {} by {})".format(format_time(previous_track_best_time), previous_track_best_car)
+                    msg = "TRACK RECORD! {} - {} {}".format(technical_name, format_time(lap_time_ms), comparison_info)
+                else:
+                    msg = "TRACK RECORD! {} - {}".format(technical_name, format_time(lap_time_ms))
+            else:
+                if previous_car_record != float('inf'):
+                    comparison_info = "(Previous {})".format(format_time(previous_car_record))
+                    msg = "PB! {} - {} {}".format(technical_name, format_time(lap_time_ms), comparison_info)
+                else:
+                    msg = "PB! {} - {}".format(technical_name, format_time(lap_time_ms))
+
+            records[technical_name] = lap_time_ms
             save_track_records(track, records)
             
-            if is_track_record:
-                msg = "NEW TRACK RECORD: {} - {} (Previous: {} by {})".format(
-                    car, format_time(time_ms), 
-                    format_time(track_best_time) if track_best_time != float('inf') else "none",
-                    track_best_car if track_best_car else "none"
-                )
-                ac.log("TACS: {}".format(msg))
-                ac.console("TACS: {}".format(msg))
-                
-                # Update record holder display immediately
-                ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), car))
-                ac.setVisible(l_record_holder, False)
-                ac.setVisible(l_record_holder, True)
-            else:
-                msg = "New car record: {} - {} (Previous: {})".format(
-                    car, format_time(time_ms), format_time(old_car_time) if old_car_time is not None else "none"
-                )
-                ac.log("TACS: {}".format(msg))
-            
-            # Always update recent records
-            update_recent_record(msg)
-            return is_track_record
-    except Exception as e:
-        ac.log("TACS Error checking record: {}".format(str(e)))
-    return False
+            update_recent_record_display(msg)
+            ac.log("TACS: {}".format(msg))
+            ac.console("TACS: {}".format(msg))
 
-def get_current_record():
-    """Get the current record for the active track"""
-    global cached_record_time, cached_record_car, last_ui_update
-    current_time = time.time()
-    
-    # Return cached values if they exist and are fresh
-    if cached_record_time is not None and current_time - last_ui_update < UI_UPDATE_INTERVAL:
-        return cached_record_time, cached_record_car
+    except Exception as e:
+        ac.log("TACS Error in check_and_update_record: {}".format(traceback.format_exc()))
+
+def get_current_track_record(records):
+    """Finds the best time and associated car name from a records dictionary."""
+    if not records:
+        return float('inf'), "N/A"
+
     try:
-        track = get_full_track_name()
-        records = load_track_records(track)
-        best_time = float('inf')
-        best_car = None
-        
-        # Find the best time for this track
-        for car, time_ms in records.items():
-            if time_ms < best_time:
-                best_time = time_ms
-                best_car = car
-        
-        if best_time != float('inf'):
-            # Update cache
-            cached_record_time = best_time
-            cached_record_car = best_car
-            last_ui_update = current_time
-            return best_time, best_car
-    except Exception as e:
-        ac.log("TACS Error getting current record: {}".format(str(e)))
-    return None, None
+        best_car, best_time = min(records.items(), key=lambda item: item[1])
+        return best_time, best_car
+    except ValueError:
+        return float('inf'), "N/A"
 
-def get_car_best_time(car_id):
-    """Get the best time for a specific car on the current track from records"""
-    global last_ui_update
-    current_time = time.time()
+def initialize_session():
+    """Sets up all session-specific data and initial UI state."""
+    global app_state, last_lap_times, last_displayed_text
     
-    # Only check records periodically
-    if current_time - last_ui_update < UI_UPDATE_INTERVAL:
-        return None
-        
-    try:
-        track = get_full_track_name()
-        car = ac.getCarName(car_id)
-        records = load_track_records(track)
-        if car in records:
-            return records[car]
-    except Exception as e:
-        ac.log("TACS Error getting car best time: {}".format(str(e)))
-    return None
+    app_state['full_track_name'] = get_full_track_name()
+    app_state['lap_count'] = 0
+    last_lap_times.clear()
+    last_displayed_text.clear()
 
-def get_full_track_name():
-    """Get the track name including its configuration"""
-    track_name = ac.getTrackName(0)
-    layout = get_track_layout()
-    return "{}_{}".format(track_name, layout)
+    ac.log("TACS: Initializing session for track: {}".format(app_state['full_track_name']))
+    
+    records = load_track_records(app_state['full_track_name'])
+    best_time, best_car_name = get_current_track_record(records)
+    
+    record_text = "Track Record: N/A"
+    if best_time != float('inf'):
+        record_text = "Track Record: {} by {}".format(format_time(best_time), best_car_name)
+    
+    update_label_if_changed(l_record_holder, record_text)
+    
+    for label in l_recent_records:
+        update_label_if_changed(label, "")
+
+
+# --- AC Hook Functions ---
 
 def acMain(ac_version):
+    """Called by Assetto Corsa to initialize the app."""
+    global app_window, l_lapcount, l_current_time, l_best_time, l_last_lap, l_record_holder, l_relative, l_recent_records
+    
     try:
-        global l_lapcount, l_current_time, l_best_time, l_record_holder, l_relative, l_recent_records
-        
-        appWindow = ac.newApp("TACS")
-        ac.setSize(appWindow, 600, 380)  # Made taller to fit records
-        ac.setTitle(appWindow, "")  # Remove title bar text to save space
-        ac.setBackgroundOpacity(appWindow, 0.9)  # Make window darker (0.0 = transparent, 1.0 = opaque)
-        
-        # Labels for lap info
-        l_lapcount = ac.addLabel(appWindow, "Laps: 0")
-        ac.setPosition(l_lapcount, 3, 30)
-        ac.setFontSize(l_lapcount, 13)
-        
-        l_current_time = ac.addLabel(appWindow, "Current: --:--.---")
-        ac.setPosition(l_current_time, 3, 50)
-        ac.setFontSize(l_current_time, 13)
-        
-        l_best_time = ac.addLabel(appWindow, "Best: --:--.---")
-        ac.setPosition(l_best_time, 3, 70)
-        ac.setFontSize(l_best_time, 13)        # Last lap time
-        global l_last_lap
-        l_last_lap = ac.addLabel(appWindow, "Last Lap: --:--.---")
-        ac.setPosition(l_last_lap, 3, 100)
-        ac.setFontSize(l_last_lap, 13)
-        ac.setSize(l_last_lap, 290, 20)  # Make label use full width
-        
-        # Record holder info
-        l_record_holder = ac.addLabel(appWindow, "Track Record: None")
-        ac.setPosition(l_record_holder, 3, 130)
-        ac.setFontSize(l_record_holder, 13)
-        ac.setSize(l_record_holder, 290, 20)  # Make label use full width
-        
-        # Relative timing info
-        l_relative = ac.addLabel(appWindow, "")
-        ac.setPosition(l_relative, 3, 160)
-        ac.setFontSize(l_relative, 13)
-        ac.setSize(l_relative, 290, 20)  # Make label use full width        # Create records directory if it doesn't exist
-        if not os.path.exists(records_dir):
-            os.makedirs(records_dir)
-            ac.log("TACS: Created records directory")
-        
-        # Display current record if it exists
-        time_ms, driver = get_current_record()
-        if time_ms:
-            ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), driver))
+        app_window = ac.newApp("TrackAndCarStats")
+        ac.setSize(app_window, 300, 340)
+        ac.setTitle(app_window, "")
+        ac.drawBorder(app_window, 0)
+        ac.setBackgroundOpacity(app_window, 0.5)
 
-        # Add records section header
-        records_title = ac.addLabel(appWindow, "Recent Records:")
-        ac.setPosition(records_title, 3, 190)
-        ac.setFontSize(records_title, 13)
+        y_pos = 10
+        l_lapcount = ac.addLabel(app_window, "Laps: 0"); ac.setPosition(l_lapcount, 10, y_pos); y_pos += 22
+        l_current_time = ac.addLabel(app_window, "Current: --:--.---"); ac.setPosition(l_current_time, 10, y_pos); y_pos += 22
+        l_best_time = ac.addLabel(app_window, "Best: --:--.---"); ac.setPosition(l_best_time, 10, y_pos); y_pos += 22
+        l_last_lap = ac.addLabel(app_window, "Last: --:--.---"); ac.setPosition(l_last_lap, 10, y_pos); y_pos += 22
+        l_record_holder = ac.addLabel(app_window, "Track Record: N/A"); ac.setPosition(l_record_holder, 10, y_pos); y_pos += 22
+        l_relative = ac.addLabel(app_window, "Relative: N/A"); ac.setPosition(l_relative, 10, y_pos); y_pos += 30
 
-        # Add empty labels for recent records
-        global l_recent_records
-        y_pos = 210
-        for i in range(MAX_RECORDS):
-            label = ac.addLabel(appWindow, "")
-            ac.setPosition(label, 3, y_pos)
-            ac.setFontSize(label, 12)
-            ac.setSize(label, 290, 20)
+        records_title = ac.addLabel(app_window, "Recent Records"); ac.setPosition(records_title, 10, y_pos); y_pos += 22
+        for i in range(MAX_RECORDS_DISPLAY):
+            label = ac.addLabel(app_window, "")
+            ac.setPosition(label, 15, y_pos)
+            ac.setFontSize(label, 14)
+            ac.setSize(label, 270, 20)
             l_recent_records.append(label)
             y_pos += 20
+            
+        for label in [l_lapcount, l_current_time, l_best_time, l_last_lap, l_record_holder, l_relative, records_title]:
+            ac.setFontSize(label, 16)
+            ac.setSize(label, 280, 22)
+
+        initialize_session()
         
-        ac.log("TACS: Window created successfully")
+        ac.log("TACS: App initialized successfully.")
         return "TACS"
+
     except Exception as e:
-        ac.log("TACS Error: {}".format(str(e)))
+        ac.log("TACS FATAL ERROR in acMain: {}".format(traceback.format_exc()))
         return "TACS"
+
+def update_relative_display(focused_car_id):
+    """Calculates and updates the relative time gaps to cars ahead and behind."""
+    num_cars = ac.getCarsCount()
+    if num_cars < 2:
+        update_label_if_changed(l_relative, "")
+        return
+
+    leaderboard = []
+    for i in range(num_cars):
+        pos = ac.getCarRealTimeLeaderboardPosition(i)
+        if pos >= 0:
+            leaderboard.append((pos, i))
+    
+    leaderboard.sort()
+    
+    my_leaderboard_index = -1
+    for i, (pos, car_id) in enumerate(leaderboard):
+        if car_id == focused_car_id:
+            my_leaderboard_index = i
+            break
+            
+    if my_leaderboard_index == -1:
+        update_label_if_changed(l_relative, "Relative: N/A")
+        return
+
+    my_spline_pos = ac.getCarState(focused_car_id, acsys.CS.NormalizedSplinePosition)
+    my_speed = ac.getCarState(focused_car_id, acsys.CS.SpeedMS)
+    track_len = ac.getTrackLength(0)
+
+    ahead_text = ""
+    if my_leaderboard_index > 0:
+        ahead_car_id = leaderboard[my_leaderboard_index - 1][1]
+        ahead_spline_pos = ac.getCarState(ahead_car_id, acsys.CS.NormalizedSplinePosition)
+        gap = ahead_spline_pos - my_spline_pos
+        if gap < -0.5: gap += 1.0
+        time_gap = (gap * track_len) / (my_speed or 1)
+        car_name_short = ac.getCarName(ahead_car_id)[:8]
+        ahead_text = u"↑{:.8s} -{:.1f}".format(car_name_short, time_gap)
+
+    behind_text = ""
+    if my_leaderboard_index < len(leaderboard) - 1:
+        behind_car_id = leaderboard[my_leaderboard_index + 1][1]
+        behind_spline_pos = ac.getCarState(behind_car_id, acsys.CS.NormalizedSplinePosition)
+        car_behind_speed = ac.getCarState(behind_car_id, acsys.CS.SpeedMS)
+        gap = my_spline_pos - behind_spline_pos
+        if gap < -0.5: gap += 1.0
+        time_gap = (gap * track_len) / (car_behind_speed or 1)
+        car_name_short = ac.getCarName(behind_car_id)[:8]
+        behind_text = u"↓{:.8s} +{:.1f}".format(car_name_short, time_gap)
+        
+    final_text = "{}   {}".format(ahead_text, behind_text).strip()
+    update_label_if_changed(l_relative, final_text)
 
 def acUpdate(deltaT):
-    try:
-        global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, lapcount
-        global best_sector1, best_sector2, best_sector3, finished_cars, l_relative, l_last_lap, last_ui_update
-        global last_displayed_text
-        
-        current_time = time.time()
-        should_update_ui = current_time - last_ui_update >= UI_UPDATE_INTERVAL
-        
-        # Get car count first
-        car_count = ac.getCarsCount()
-        
-        # Update relative position
-        focused_car = ac.getFocusedCar()
-        focused_pos = ac.getCarRealTimeLeaderboardPosition(focused_car)
-        
-        def calculate_gap(car_id, my_pos, my_speed):
-            """Calculate gap to another car"""
-            if car_id < 0:
-                return None, None
-            
-            car_pos = ac.getCarState(car_id, acsys.CS.NormalizedSplinePosition)
-            car_speed = ac.getCarState(car_id, acsys.CS.SpeedMS)
-            name = ac.getCarName(car_id)  # Using car name instead of driver name
-            name = name.split('_')[-1][:8]  # Take last part of car name, limit to 8 chars
-            
-            # Calculate the gap
-            track_length = ac.getTrackLength(0)
-            pos_diff = car_pos - my_pos
-            if pos_diff < -0.5:
-                pos_diff += 1.0
-            elif pos_diff > 0.5:
-                pos_diff -= 1.0
-            pos_diff *= track_length
-            
-            # Calculate time gap
-            if my_speed > 0 and car_speed > 0:
-                avg_speed = (car_speed + my_speed) / 2
-                gap = pos_diff / avg_speed * 1000  # Convert to milliseconds
-                if abs(gap) < 30000:  # Only return reasonable gaps (under 30 seconds)
-                    return name, gap
-            return None, None
-        
-        # Clear the label if we're not in a valid state
-        if focused_car < 0 or focused_pos < 0:
-            ac.setText(l_relative, "")
-            return
-            
-        # Get my current state
-        my_pos = ac.getCarState(focused_car, acsys.CS.NormalizedSplinePosition)
-        my_speed = ac.getCarState(focused_car, acsys.CS.SpeedMS)
-        
-        # Find cars ahead and behind
-        car_ahead = -1
-        car_behind = -1
-        
-        for car_id in range(car_count):
-            pos = ac.getCarRealTimeLeaderboardPosition(car_id)
-            if pos == focused_pos - 1:
-                car_ahead = car_id
-            elif pos == focused_pos + 1:
-                car_behind = car_id
-        
-        # Calculate gaps
-        ahead_name, ahead_gap = calculate_gap(car_ahead, my_pos, my_speed)
-        behind_name, behind_gap = calculate_gap(car_behind, my_pos, my_speed)
-        
-        # Format display - make it more compact by using a single line
-        relative_text = ""
-        if ahead_name and behind_name:
-            # Show both gaps in format: "↑Car1 -1.234 ↓Car2 +0.567"
-            relative_text = "↑ {} -{} ↓ {} +{}".format(
-                ahead_name,
-                format_time(abs(ahead_gap)),
-                behind_name,
-                format_time(abs(behind_gap))
-            )
-        elif ahead_name:
-            # Only show car ahead: "↑Car1 -1.234"
-            relative_text = "↑ {} -{}".format(
-                ahead_name,
-                format_time(abs(ahead_gap))
-            )
-        elif behind_name:
-            # Only show car behind: "Lead ↓Car2 +0.567"
-            relative_text = "Lead ↓ {} +{}".format(
-                behind_name,
-                format_time(abs(behind_gap))
-            )
-        else:
-            relative_text = "In Lead"
-        
-        ac.setText(l_relative, relative_text)
-          # Update current lap time
-        current_time = ac.getCarState(focused_car, acsys.CS.LapTime)
-        if current_time > 0:
-            ac.setText(l_current_time, "Current: {}".format(format_time(current_time)))
-        else:
-            ac.setText(l_current_time, "Current: --:--.---")        # Update best lap time - only check records periodically
-        session_best = ac.getCarState(focused_car, acsys.CS.BestLap)
-        car_best = None
-        if should_update_ui:
-            car_best = get_car_best_time(focused_car)
-        last_time = ac.getCarState(focused_car, acsys.CS.LastLap)
-        
-        # Initialize best time to infinity
-        best_time = float('inf')
-        
-        # Check all potential sources for the best time
-        if session_best > 0:
-            best_time = session_best
-        if car_best and car_best < best_time:
-            best_time = car_best
-        if last_time > 0:  # Include last lap in case it's our first and best lap
-            if best_time == float('inf') or last_time < best_time:
-                best_time = last_time
-        
-        # Update display with the best time we found
-        if best_time != float('inf'):
-            ac.setText(l_best_time, "Best: {}".format(format_time(best_time)))
-          # Track lap completions and update last lap time
-        global l_last_lap, l_record_holder  # Ensure we have access to the labels
-        current_laps = ac.getCarState(focused_car, acsys.CS.LapCount)
-        last_time = ac.getCarState(focused_car, acsys.CS.LastLap)
-        current_time = ac.getCarState(focused_car, acsys.CS.LapTime)
-        
-        try:
-            # Check all cars for completed laps
-            car_count = ac.getCarsCount()
-            for car_id in range(car_count):
-                car_last_time = ac.getCarState(car_id, acsys.CS.LastLap)
-                if car_last_time > 0 and (car_id not in last_lap_times or car_last_time != last_lap_times[car_id]):
-                    last_lap_times[car_id] = car_last_time
-                    track = get_full_track_name()
-                    car = ac.getCarName(car_id)
-                    driver = ac.getDriverName(car_id)
-                    check_record(track, car, driver, car_last_time)  # Display is updated in check_record if it's a record
-            
-            # Special handling for focused car's last lap display
-            if last_time > 0 and (focused_car not in last_lap_times or last_time != last_lap_times[focused_car]):
-                last_lap_times[focused_car] = last_time
-            
-            # Update last lap display only if needed
-            new_lap_text = "Last Lap: {}".format(
-                format_time(last_lap_times[focused_car]) if focused_car in last_lap_times and last_lap_times[focused_car] > 0
-                else "--:--.---"
-            )
-            if new_lap_text != last_displayed_text.get('last_lap'):
-                last_displayed_text['last_lap'] = new_lap_text
-                ac.setText(l_last_lap, new_lap_text)
-        except Exception as e:
-            ac.log("TACS Error updating last lap: {}".format(str(e)))
-        
-        # Update lap counter
-        if current_laps > lapcount:
-            lapcount = current_laps
-            ac.setText(l_lapcount, "Laps: {}".format(lapcount))
-            ac.log("TACS: Lap completed: {}".format(lapcount))
-            
-            # Reset best sectors for the new lap
-            best_sector1 = float('inf')
-            best_sector2 = float('inf')
-            best_sector3 = float('inf')
-        
-        # Check all cars for finishes
-        for car_id in range(car_count):
-            if car_id in finished_cars:
-                continue
-            
-            # Try to detect finish through various means
-            is_finished = (
-                ac.getCarState(car_id, acsys.CS.RaceFinished) or
-                (ac.getCarState(car_id, acsys.CS.LapCount) > 0 and  # Has completed at least one lap
-                 ac.getCarRealTimeLeaderboardPosition(car_id) == 1)  # Is in first position
-            )
-            
-            if is_finished:
-                driver = ac.getDriverName(car_id)
-                car = ac.getCarName(car_id)
-                track = get_full_track_name()
-                time_ms = ac.getCarState(car_id, acsys.CS.LastLap)
-                
-                # Only process valid times
-                if time_ms > 0:
-                    position = ac.getCarRealTimeLeaderboardPosition(car_id) + 1
-                    
-                    # Log the finish
-                    msg = "P{} - {} in {} finished at {} with time {}".format(
-                        position, driver, car, track, format_time(time_ms)
-                    )
-                    ac.log("TACS: {}".format(msg))
-                    ac.console("TACS: {}".format(msg))
-                    
-                    # Check if this is a new record
-                    if check_record(track, car, driver, time_ms):
-                        # Update the display with the new record
-                        ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), car))
-                    
-                    finished_cars.add(car_id)
+    """Called by Assetto Corsa every frame. Hot path for performance."""
+    global app_state
     
+    try:
+        now = time.time()
+        should_update_slow_ui = (now - app_state['last_ui_update']) >= UI_UPDATE_INTERVAL
+
+        focused_car = ac.getFocusedCar()
+        if focused_car < 0: return
+
+        # --- Fast UI Updates ---
+        update_label_if_changed(l_current_time, "Current: {}".format(format_time(ac.getCarState(focused_car, acsys.CS.LapTime))))
+        update_label_if_changed(l_last_lap, "Last: {}".format(format_time(ac.getCarState(focused_car, acsys.CS.LastLap))))
+        
+        current_laps = ac.getCarState(focused_car, acsys.CS.LapCount)
+        if current_laps > app_state['lap_count']:
+            app_state['lap_count'] = current_laps
+        update_label_if_changed(l_lapcount, "Laps: {}".format(app_state['lap_count']))
+
+        # --- Check for new completed laps from ANY car (for records) ---
+        num_cars = ac.getCarsCount()
+        for car_id in range(num_cars):
+            car_last_lap = ac.getCarState(car_id, acsys.CS.LastLap)
+            if car_last_lap > 0 and car_last_lap != last_lap_times.get(car_id):
+                last_lap_times[car_id] = car_last_lap
+                check_and_update_record(app_state['full_track_name'], car_id, car_last_lap)
+
+        # --- Slow UI Updates (Record Holder, Best Lap, Relatives, etc.) ---
+        if should_update_slow_ui:
+            app_state['last_ui_update'] = now
+            
+            records = load_track_records(app_state['full_track_name'])
+
+            # Update Best Lap Display
+            session_best_lap = ac.getCarState(focused_car, acsys.CS.BestLap)
+            car_name = ac.getCarName(focused_car)
+            car_all_time_best = records.get(car_name, float('inf'))
+            
+            true_best = float('inf')
+            if session_best_lap > 0:
+                true_best = session_best_lap
+            if car_all_time_best < true_best:
+                true_best = car_all_time_best
+
+            if true_best != float('inf'):
+                update_label_if_changed(l_best_time, "Best: {}".format(format_time(true_best)))
+            else:
+                update_label_if_changed(l_best_time, "Best: N/A")
+
+            # Update Record Holder
+            best_time, best_car_name = get_current_track_record(records)
+            record_text = "Track Record: N/A"
+            if best_time != float('inf'):
+                record_text = "Track Record: {} by {}".format(format_time(best_time), best_car_name)
+            update_label_if_changed(l_record_holder, record_text)
+
+            # Update Relative Gaps
+            update_relative_display(focused_car)
+
     except Exception as e:
-        ac.log("TACS Error in update: {}".format(str(e)))
+        ac.log("TACS Error in acUpdate: {}".format(traceback.format_exc()))
 
 def acShutdown():
-    ac.log("TACS: Shutting down")
+    """Called by Assetto Corsa when the app is being shut down."""
+    ac.log("TACS: Shutting down.")
