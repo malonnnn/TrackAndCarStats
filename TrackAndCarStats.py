@@ -19,10 +19,12 @@ last_lap_times = {}  # Format: {car_id: last_lap_time}
 records_cache = {}  # Format: {track: {car: time_ms}}
 last_load_time = {}  # Format: {track: timestamp}
 last_ui_update = 0  # Track when we last updated the UI with record information
-UI_UPDATE_INTERVAL = 2.0  # Update UI with record information every 2 seconds
+UI_UPDATE_INTERVAL = 0.5  # Update UI with record information every 0.5 seconds (more responsive)
 last_displayed_text = {}  # Store last displayed text for each label
 cached_record_time = None
 cached_record_car = None
+l_recent_records = []  # List to store labels for recent records
+MAX_RECORDS = 6  # Number of recent records to display
 
 def get_track_layout():
     """Get the current track layout configuration"""
@@ -165,18 +167,23 @@ def check_record(track, car, driver, time_ms):
             old_time = format_time(records[car]) if car in records else "none"
             records[car] = time_ms
             save_track_records(track, records)
-            
-            # Only announce if it's a track record
+              # Update both log and labels with the new record
             if is_track_record:
-                msg = "NEW TRACK RECORD: {} on {}! Time: {} (Previous: {})".format(
-                    car, track, format_time(time_ms), format_time(track_best_time) if track_best_time != float('inf') else "none"
+                msg = "NEW TRACK RECORD: {} - {} (Previous: {})".format(
+                    car, format_time(time_ms), format_time(track_best_time) if track_best_time != float('inf') else "none"
                 )
                 ac.log("TACS: {}".format(msg))
                 ac.console("TACS: {}".format(msg))
                 ac.console("TACS: View all records in: apps/python/TACS/viewer.html")
-                
-                # Update the display immediately
+                  # Update the display immediately
                 ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), car))
+                ac.setVisible(l_record_holder, False)  # Force refresh
+                ac.setVisible(l_record_holder, True)
+                update_recent_record(msg)  # Add to recent records log
+            else:
+                # It's a car-specific record but not an overall track record
+                msg = "New car record: {} - {}".format(car, format_time(time_ms))
+                update_recent_record(msg)  # Add to recent records log
             
             return is_track_record
     except Exception as e:
@@ -240,11 +247,10 @@ def get_full_track_name():
 
 def acMain(ac_version):
     try:
-        global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, l_record_holder, l_relative
+        global l_lapcount, l_current_time, l_best_time, l_sector1, l_sector2, l_sector3, l_record_holder, l_relative, l_recent_records
 
-        
         appWindow = ac.newApp("TACS")
-        ac.setSize(appWindow, 300, 280)  # Increased width to 300
+        ac.setSize(appWindow, 300, 380)  # Made taller to fit records
         ac.setTitle(appWindow, "")  # Remove title bar text to save space
         
         # Labels for lap info
@@ -285,7 +291,22 @@ def acMain(ac_version):
         time_ms, driver = get_current_record()
         if time_ms:
             ac.setText(l_record_holder, "Track Record: {} by {}".format(format_time(time_ms), driver))
-  
+
+        # Add records section header
+        records_title = ac.addLabel(appWindow, "Recent Records:")
+        ac.setPosition(records_title, 3, 190)
+        ac.setFontSize(records_title, 13)
+
+        # Add empty labels for recent records
+        global l_recent_records
+        y_pos = 210
+        for i in range(MAX_RECORDS):
+            label = ac.addLabel(appWindow, "")
+            ac.setPosition(label, 3, y_pos)
+            ac.setFontSize(label, 12)
+            ac.setSize(label, 290, 20)
+            l_recent_records.append(label)
+            y_pos += 20
         
         ac.log("TACS: Window created successfully")
         return "TACS"
@@ -489,6 +510,28 @@ def acUpdate(deltaT):
     
     except Exception as e:
         ac.log("TACS Error in update: {}".format(str(e)))
+
+def update_recent_record(message):
+    """Update the recent records display with a new message"""
+    global l_recent_records
+    # Skip if we don't have any labels yet
+    if not l_recent_records:
+        return
+    
+    # Shift existing messages down
+    for i in range(len(l_recent_records) - 1, 0, -1):
+        text = ac.getText(l_recent_records[i-1])
+        ac.setText(l_recent_records[i], text)
+        # Force a refresh of the label
+        ac.setVisible(l_recent_records[i], False)
+        ac.setVisible(l_recent_records[i], True)
+    
+    # Add new message at top
+    if len(l_recent_records) > 0:
+        ac.setText(l_recent_records[0], message)
+        # Force a refresh of the label
+        ac.setVisible(l_recent_records[0], False)
+        ac.setVisible(l_recent_records[0], True)
 
 def acShutdown():
     ac.log("TACS: Shutting down")
